@@ -1,0 +1,1566 @@
+#!/usr/bin/env python3
+"""Relay — a durable memory + operations layer for an agent that works a CRM.
+
+The agent (OpenCode) is the brain and the browser (Browse MCP) is the hands.
+Relay keeps the part that must survive a context window: who the customer is,
+what was promised, what is overdue, what was already said, and an audit trail.
+
+Only stdlib. Data lives in SQLite (default ./data/relay.db).
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import shlex
+import sqlite3
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+DEFAULT_DB = ROOT / "data" / "relay.db"
+DB_PATH = Path(os.environ.get("RELAY_DB", DEFAULT_DB))
+
+BOLD, DIM, GREEN, AMBER, RED, RESET = "", "", "", "", "", ""
+if sys.stdout.isatty():
+    BOLD, DIM, GREEN, AMBER, RED, RESET = (
+        "\033[1m", "\033[2m", "\033[32m", "\033[33m", "\033[31m", "\033[0m",
+    )
+
+
+# ---------------------------------------------------------------- time helpers
+def now():
+    return datetime.now(timezone.utc)
+
+
+def iso(dt):
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def parse(ts):
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def humanize(ts):
+    dt = parse(ts)
+    if not dt:
+        return "—"
+    secs = (now() - dt).total_seconds()
+    if secs < 0:
+        return "in " + humanize_future(-secs)
+    return humanize_future(secs) + " ago"
+
+
+def humanize_future(secs):
+    if secs < 3600:
+        return f"{int(secs // 60)}m"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h"
+    return f"{int(secs // 86400)}d"
+
+
+def parse_due(value):
+    """'4h', '2d', or an ISO timestamp -> ISO string."""
+    if not value:
+        return None
+    v = value.strip()
+    try:
+        if v.endswith("h"):
+            return iso(now() + timedelta(hours=float(v[:-1])))
+        if v.endswith("d"):
+            return iso(now() + timedelta(days=float(v[:-1])))
+        if v.endswith("m"):
+            return iso(now() + timedelta(minutes=float(v[:-1])))
+        return iso(datetime.fromisoformat(v.replace("Z", "+00:00")))
+    except ValueError:
+        sys.exit(f"error: cannot parse due date '{value}' (use 4h, 2d, or ISO)")
+
+
+# ---------------------------------------------------------------- db
+SCHEMA = """
+create table if not exists accounts (
+  id text primary key, name text not null, domain text, plan text, mrr real default 0,
+  stage text, owner text, health text default 'ok', created_at text
+);
+create table if not exists contacts (
+  id text primary key, account_id text references accounts(id), name text not null,
+  email text, role text, tz text, sentiment text
+);
+create table if not exists threads (
+  id text primary key, account_id text references accounts(id),
+  contact_id text references contacts(id), subject text, channel text default 'email',
+  status text default 'open', waiting_since text, sla_due text, assignee text,
+  summary text, tags text default '[]', updated_at text
+);
+create table if not exists messages (
+  id integer primary key autoincrement, thread_id text references threads(id),
+  direction text check(direction in ('in','out')), author text, body text,
+  sent_at text, external_id text
+);
+create table if not exists commitments (
+  id integer primary key autoincrement, thread_id text references threads(id),
+  text text not null, due_at text, status text default 'open', created_at text
+);
+create table if not exists tasks (
+  id integer primary key autoincrement, thread_id text references threads(id),
+  kind text, title text, due_at text, status text default 'open'
+);
+create table if not exists drafts (
+  id integer primary key autoincrement, thread_id text references threads(id),
+  body text not null, status text default 'pending', created_at text, approved_by text
+);
+create table if not exists events (
+  id integer primary key autoincrement, thread_id text, kind text, detail text, created_at text
+);
+create table if not exists feedback (
+  id integer primary key autoincrement, thread_id text, message_id integer,
+  source text default 'human' check(source in ('human','customer','review')),
+  rating integer, tags text, note text, created_at text
+);
+create table if not exists lessons (
+  id integer primary key autoincrement,
+  scope text default 'voice' check(scope in ('voice','policy','product','flow')),
+  text text not null, evidence text, status text default 'proposed'
+    check(status in ('proposed','active','retired')),
+  created_at text, promoted_at text, promoted_by text
+);
+"""
+
+
+def db():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA)
+    return conn
+
+
+def one(conn, sql, params=()):
+    row = conn.execute(sql, params).fetchone()
+    return dict(row) if row else None
+
+
+def many(conn, sql, params=()):
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def audit(conn, thread_id, kind, detail):
+    conn.execute(
+        "insert into events(thread_id, kind, detail, created_at) values (?,?,?,?)",
+        (thread_id, kind, detail, iso(now())),
+    )
+
+
+def fingerprint(thread_id, m):
+    raw = "|".join([
+        thread_id,
+        m.get("direction", "in"),
+        m.get("sent_at", ""),
+        " ".join((m.get("body") or "").split()),
+    ])
+    return "fp:" + hashlib.sha1(raw.encode()).hexdigest()[:16]
+
+
+def message_exists(conn, thread_id, m):
+    ext = m.get("external_id") or fingerprint(thread_id, m)
+    if one(conn, "select id from messages where external_id=?", (ext,)):
+        return True
+    return bool(one(
+        conn,
+        "select id from messages where thread_id=? and direction=? and sent_at=? and body=?",
+        (thread_id, m.get("direction", "in"), m.get("sent_at"), m.get("body", "")),
+    ))
+
+
+def store_message(conn, thread_id, m):
+    """Insert once. Returns True if the message was new."""
+    if message_exists(conn, thread_id, m):
+        return False
+    conn.execute(
+        "insert into messages(thread_id,direction,author,body,sent_at,external_id) values (?,?,?,?,?,?)",
+        (thread_id, m.get("direction", "in"), m.get("author"), m.get("body", ""),
+         m.get("sent_at") or iso(now()), m.get("external_id") or fingerprint(thread_id, m)),
+    )
+    return True
+
+
+def ensure_party(conn, a=None, c=None):
+    if a and a.get("id"):
+        conn.execute(
+            """insert into accounts(id,name,domain,plan,mrr,stage,owner,health,created_at)
+               values (?,?,?,?,?,?,?,?,?)
+               on conflict(id) do update set
+                 name=excluded.name, domain=excluded.domain, plan=excluded.plan,
+                 mrr=excluded.mrr, stage=excluded.stage, owner=excluded.owner, health=excluded.health""",
+            (a["id"], a.get("name", a["id"]), a.get("domain"), a.get("plan"), a.get("mrr", 0),
+             a.get("stage"), a.get("owner"), a.get("health", "ok"), iso(now())),
+        )
+    if c and c.get("id"):
+        conn.execute(
+            """insert into contacts(id,account_id,name,email,role,tz,sentiment)
+               values (?,?,?,?,?,?,?)
+               on conflict(id) do update set
+                 account_id=excluded.account_id, name=excluded.name, email=excluded.email,
+                 role=excluded.role, tz=excluded.tz, sentiment=excluded.sentiment""",
+            (c["id"], a.get("id") if a else None, c.get("name", c["id"]), c.get("email"),
+             c.get("role"), c.get("tz"), c.get("sentiment")),
+        )
+
+
+def thread_tags(row):
+    try:
+        return json.loads(row.get("tags") or "[]")
+    except json.JSONDecodeError:
+        return []
+
+
+def must_thread(conn, tid):
+    t = one(
+        conn,
+        """select t.*, a.name as account, a.mrr, a.stage as account_stage,
+                  c.name as contact, c.email, c.tz, c.sentiment
+           from threads t
+           left join accounts a on a.id = t.account_id
+           left join contacts c on c.id = t.contact_id
+           where t.id = ?""",
+        (tid,),
+    )
+    if not t:
+        sys.exit(f"error: no thread '{tid}' (try: relay queue)")
+    return t
+
+
+# ---------------------------------------------------------------- policy
+DEFAULT_CONFIG = {
+    "autonomy": "approve",
+    "daily_send_cap": 30,
+    "reply_word_limit": 180,
+    "vip_mrr_threshold": 5000,
+    "risky_tags": ["billing", "security", "churn risk", "legal", "contract", "vip"],
+    "approval_phrases": [],
+}
+
+
+def load_config():
+    cfg = dict(DEFAULT_CONFIG)
+    path = ROOT / "config.json"
+    if path.exists():
+        try:
+            cfg.update(json.loads(path.read_text()))
+        except json.JSONDecodeError:
+            sys.exit("error: config.json is not valid JSON")
+    return cfg
+
+
+def policy_check(conn, t, body):
+    """Return {decision, reasons, tier}. Reasons are what the human sees."""
+    cfg = load_config()
+    tier = cfg.get("autonomy", "approve")
+    reasons = []
+
+    words = len(body.split())
+    if words > cfg.get("reply_word_limit", 180):
+        reasons.append(f"{words} words exceeds {cfg['reply_word_limit']}-word limit")
+
+    tags = {x.lower() for x in thread_tags(t)}
+    hit_tags = sorted(tags & {x.lower() for x in cfg.get("risky_tags", [])})
+    if hit_tags:
+        reasons.append("sensitive thread: " + ", ".join(hit_tags))
+
+    low = " ".join(body.lower().split())
+    hits = [p for p in cfg.get("approval_phrases", []) if p in low]
+    if hits:
+        reasons.append("commitment language: " + ", ".join(hits[:3]))
+
+    if (t.get("mrr") or 0) >= cfg.get("vip_mrr_threshold", 5000):
+        reasons.append(f"VIP account (${t['mrr']:,.0f} MRR)")
+
+    sent_today = one(
+        conn,
+        "select count(*) c from messages where direction='out' and author='agent' and sent_at >= ?",
+        (iso(now().replace(hour=0, minute=0, second=0, microsecond=0)),),
+    )["c"]
+    if sent_today >= cfg.get("daily_send_cap", 30):
+        reasons.append(f"daily cap reached ({sent_today}/{cfg['daily_send_cap']})")
+
+    if tier == "suggest":
+        return {"decision": "draft_only", "tier": tier,
+                "reasons": ["autonomy=suggest: drafts only, never sends"] + reasons}
+    if tier == "approve":
+        return {"decision": "requires_approval", "tier": tier,
+                "reasons": ["autonomy=approve: every send needs a human"] + reasons}
+    return {
+        "decision": "requires_approval" if reasons else "auto_send",
+        "tier": tier, "reasons": reasons,
+    }
+
+
+def cmd_check(args):
+    conn = db()
+    t = must_thread(conn, args.id)
+    body = sys.stdin.read() if args.stdin else (args.text or "")
+    if not body.strip():
+        sys.exit("error: provide --text or --stdin")
+    res = policy_check(conn, t, body)
+    res["thread"] = args.id
+    res["words"] = len(body.split())
+    print(json.dumps(res, indent=2))
+
+
+
+# ---------------------------------------------------------------- scoring
+def score(t):
+    """Explainable priority: every point maps to a reason the agent can cite."""
+    pts, reasons = 0.0, []
+    mrr = t.get("mrr") or 0
+    if mrr:
+        add = min(30, mrr / 100)
+        pts += add
+        reasons.append(f"${mrr:,.0f} MRR")
+    if t.get("waiting_since"):
+        hours = (now() - parse(t["waiting_since"])).total_seconds() / 3600
+        add = min(40, max(0, hours) * 2)
+        pts += add
+        reasons.append(f"waiting {humanize_future(hours * 3600)}")
+    tags = [x.lower() for x in thread_tags(t)]
+    if any(x in ("churn risk", "churn") for x in tags):
+        pts += 14
+        reasons.append("churn risk")
+    if any(x in ("blocking", "security") for x in tags):
+        pts += 12
+        reasons.append("blocking")
+    if (t.get("sentiment") or "").lower() in ("frustrated", "angry"):
+        pts += 15
+        reasons.append(f"sentiment {t['sentiment']}")
+    if (t.get("account_stage") or "") in ("Negotiation", "Closed won"):
+        pts += 5
+    sla = parse(t.get("sla_due"))
+    if sla:
+        hours = (sla - now()).total_seconds() / 3600
+        if hours < 0:
+            pts += 25
+            reasons.append(f"SLA breached {humanize_future(-hours * 3600)}")
+        elif hours <= 4:
+            pts += 12
+            reasons.append(f"SLA in {humanize_future(hours * 3600)}")
+    if (t.get("health") or "") == "at_risk":
+        pts += 10
+        reasons.append("account at risk")
+    return round(pts, 1), reasons
+
+
+# ---------------------------------------------------------------- commands
+def cmd_init(_args):
+    with db() as conn:
+        conn.commit()
+    print(f"initialised {DB_PATH}")
+
+
+def cmd_seed(args):
+    conn = db()
+    if args.reset:
+        for table in ("events", "drafts", "tasks", "commitments", "messages",
+                      "threads", "contacts", "accounts"):
+            conn.execute(f"delete from {table}")
+    t0 = now()
+    accounts = [
+        ("loomly", "Loomly", "loomly.io", "Scale · 24 seats", 1850, "Negotiation", "Alex Rivera", "ok"),
+        ("northgate", "Northgate Labs", "northgate.dev", "Growth · 40 seats", 2400, "Evaluation", "Alex Rivera", "ok"),
+        ("fieldnote", "Fieldnote Studio", "fieldnote.studio", "Starter · 5 seats", 290, "At risk", "Unassigned", "at_risk"),
+    ]
+    for a in accounts:
+        conn.execute(
+            "insert or replace into accounts(id,name,domain,plan,mrr,stage,owner,health,created_at) values (?,?,?,?,?,?,?,?,?)",
+            (*a, iso(t0 - timedelta(days=240))),
+        )
+    contacts = [
+        ("priya", "loomly", "Priya Raman", "priya@loomly.io", "Finance lead", "CET", "Warm"),
+        ("marcus", "northgate", "Marcus Feld", "m.feld@northgate.dev", "Head of Security", "CT", "Neutral"),
+        ("dana", "fieldnote", "Dana Okafor", "dana@fieldnote.studio", "Founder", "WAT", "Frustrated"),
+    ]
+    for c in contacts:
+        conn.execute(
+            "insert or replace into contacts(id,account_id,name,email,role,tz,sentiment) values (?,?,?,?,?,?,?)",
+            c,
+        )
+
+    threads = [
+        ("t-priya", "loomly", "priya", "Renewal invoice — VAT ID missing", "email",
+         "open", iso(t0 - timedelta(hours=6)), iso(t0 + timedelta(hours=2)), "Alex Rivera",
+         "Renewal invoice needs VAT DE327441920 so AP can raise the PO before Friday.",
+         json.dumps(["Billing", "Expansion", "Priority"])),
+        ("t-marcus", "northgate", "marcus", "SAML metadata for Okta", "email",
+         "open", iso(t0 - timedelta(hours=2)), iso(t0 + timedelta(hours=6)), "Alex Rivera",
+         "Security review passed. Blocked on SAML metadata/ACS URL for an Okta test login; annual order Thursday.",
+         json.dumps(["Security", "SSO", "Blocking"])),
+        ("t-dana", "fieldnote", "dana", "Thinking about cancelling", "email",
+         "open", iso(t0 - timedelta(hours=11)), iso(t0 + timedelta(hours=1)), "Unassigned",
+         "Low usage since January; wants to cancel before next cycle.",
+         json.dumps(["Churn risk", "Usage drop"])),
+    ]
+    for t in threads:
+        conn.execute(
+            """insert or replace into threads
+               (id,account_id,contact_id,subject,channel,status,waiting_since,sla_due,assignee,summary,tags,updated_at)
+               values (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (*t, iso(t0)),
+        )
+
+    messages = [
+        ("t-priya", "in", "Priya Raman",
+         "Hi there — we got the renewal invoice for the Scale plan today, but our VAT number isn't on it. "
+         "Our finance team can't process it without that, and the PO closes Friday.\n\n"
+         "Could you reissue it with DE327441920 on it? Happy to jump on a quick call if that's easier.",
+         iso(t0 - timedelta(hours=6))),
+        ("t-priya", "out", "Alex (Relay)",
+         "Hi Priya — thanks for flagging, and sorry for the friction. I've asked our billing team to reissue "
+         "with your VAT ID and to CC your AP inbox. You should have it well before Friday.",
+         iso(t0 - timedelta(hours=5.5))),
+        ("t-priya", "in", "Priya Raman",
+         "Thanks Alex. One more thing — we're adding 6 seats in January. Is the volume tier applied "
+         "automatically, or do we need a new order form?",
+         iso(t0 - timedelta(hours=5))),
+        ("t-marcus", "in", "Marcus Feld",
+         "Our security review passed, which is good news. The last blocker is SSO: I need the SAML metadata "
+         "XML and the ACS URL for Okta. Our IT team wants to do a test login this week.\n\n"
+         "If that works we can sign the annual order on Thursday.",
+         iso(t0 - timedelta(hours=2))),
+        ("t-marcus", "in", "Marcus Feld",
+         "Also — does the Growth plan include SCIM provisioning, or is that an add-on?",
+         iso(t0 - timedelta(hours=1.9))),
+        ("t-dana", "in", "Dana Okafor",
+         "Hi — I want to be straight with you. We've been on Starter since January and the team has basically "
+         "stopped opening it. The reports don't match how we work and I can't justify the renewal.\n\n"
+         "Unless there's something I'm missing, we'll cancel before the next cycle.",
+         iso(t0 - timedelta(hours=11))),
+        ("t-dana", "in", "Dana Okafor",
+         "For context we're a 5-person studio, mostly client projects.",
+         iso(t0 - timedelta(hours=10.9))),
+    ]
+    for m in messages:
+        conn.execute(
+            "insert into messages(thread_id,direction,author,body,sent_at) values (?,?,?,?,?)", m
+        )
+
+    conn.execute(
+        "insert into commitments(thread_id,text,due_at,status,created_at) values (?,?,?,?,?)",
+        ("t-priya", "Reissue renewal invoice with VAT DE327441920 and CC AP",
+         iso(t0 + timedelta(hours=3)), "open", iso(t0 - timedelta(hours=5.5))),
+    )
+    conn.execute(
+        "insert into commitments(thread_id,text,due_at,status,created_at) values (?,?,?,?,?)",
+        ("t-marcus", "Send SAML metadata XML + ACS URL for Okta", iso(t0 + timedelta(days=1)), "open", iso(t0)),
+    )
+    conn.execute(
+        "insert into tasks(thread_id,kind,title,due_at,status) values (?,?,?,?,?)",
+        ("t-priya", "followup", "Confirm AP received the reissued invoice", iso(t0 + timedelta(days=2)), "open"),
+    )
+    conn.execute(
+        "insert into tasks(thread_id,kind,title,due_at,status) values (?,?,?,?,?)",
+        ("t-dana", "review", "Workflow review before renewal — decide save vs cancel", iso(t0 + timedelta(hours=20)), "open"),
+    )
+    for tid in ("t-priya", "t-marcus", "t-dana"):
+        audit(conn, tid, "imported", "Seeded from demo CRM")
+    conn.commit()
+    print(f"seeded demo data ({len(accounts)} accounts, {len(threads)} threads)")
+
+
+def cmd_queue(args):
+    conn = db()
+    rows = many(
+        conn,
+        """select t.*, a.name as account, a.mrr, a.stage as account_stage, a.health,
+                  c.name as contact, c.sentiment
+           from threads t
+           left join accounts a on a.id = t.account_id
+           left join contacts c on c.id = t.contact_id
+           where t.status = 'open'
+           order by t.updated_at desc""",
+    )
+    ranked = []
+    for r in rows:
+        s, reasons = score(r)
+        r["score"], r["reasons"] = s, reasons
+        ranked.append(r)
+    ranked.sort(key=lambda x: x["score"], reverse=True)
+    ranked = ranked[: args.limit]
+
+    if args.json:
+        print(json.dumps([
+            {
+                "thread": r["id"], "subject": r["subject"], "contact": r["contact"],
+                "company": r["account"], "mrr": r["mrr"], "stage": r["account_stage"],
+                "assignee": r["assignee"], "waiting_since": r["waiting_since"],
+                "sla_due": r["sla_due"], "score": r["score"], "reasons": r["reasons"],
+            }
+            for r in ranked
+        ], indent=2))
+        return
+
+    print(f"\n{BOLD}Priority queue{RESET} {DIM}· {len(ranked)} open · ranked by revenue × wait × risk{RESET}\n")
+    for i, r in enumerate(ranked, 1):
+        print(f"{BOLD}{i}. {r['contact']}{RESET} {DIM}· {r['account']} · {r['id']}{RESET}")
+        print(f"   {r['subject']}")
+        print(f"   {DIM}score{RESET} {r['score']:.0f}   {DIM}waiting{RESET} "
+              f"{humanize_future((now() - parse(r['waiting_since'])).total_seconds()) if r['waiting_since'] else '—'}"
+              f"   {DIM}sla{RESET} {humanize(r['sla_due'])}   {DIM}{r['assignee']}{RESET}")
+        print(f"   {AMBER}{' · '.join(r['reasons'])}{RESET}\n")
+
+
+def cmd_thread(args):
+    conn = db()
+    t = must_thread(conn, args.id)
+    t["tags"] = thread_tags(t)
+    t["messages"] = many(
+        conn, "select direction,author,body,sent_at from messages where thread_id=? order by sent_at", (args.id,)
+    )
+    t["commitments"] = many(
+        conn, "select id,text,due_at,status from commitments where thread_id=? order by id", (args.id,)
+    )
+    t["tasks"] = many(
+        conn, "select id,kind,title,due_at,status from tasks where thread_id=? order by id", (args.id,)
+    )
+    t["drafts"] = many(
+        conn, "select id,body,status,created_at from drafts where thread_id=? order by id desc", (args.id,)
+    )
+    t["history"] = many(
+        conn, "select kind,detail,created_at from events where thread_id=? order by id desc limit 12", (args.id,)
+    )
+    t["feedback"] = many(
+        conn, "select rating,source,tags,note,created_at from feedback where thread_id=? order by id desc limit 6", (args.id,)
+    )
+    print(json.dumps(t, indent=2))
+
+
+def cmd_draft(args):
+    conn = db()
+    must_thread(conn, args.id)
+    body = sys.stdin.read() if args.stdin else args.text
+    if not body or not body.strip():
+        sys.exit("error: empty draft")
+    cur = conn.execute(
+        "insert into drafts(thread_id,body,status,created_at) values (?,?,?,?)",
+        (args.id, body.strip(), "pending", iso(now())),
+    )
+    audit(conn, args.id, "draft", f"Draft #{cur.lastrowid} created by {args.by}")
+    conn.commit()
+    print(f"draft #{cur.lastrowid} saved (pending approval)"
+          f"\n  review:  relay draft-show {cur.lastrowid}"
+          f"\n  approve: relay approve {cur.lastrowid} --by you"
+          f"\n  send:    relay send {args.id} --draft {cur.lastrowid}")
+
+
+def cmd_draft_show(args):
+    conn = db()
+    row = one(conn, "select * from drafts where id=?", (args.id,))
+    if not row:
+        sys.exit(f"error: no draft {args.id}")
+    print(f"draft #{row['id']} · {row['status']} · {row['thread_id']}")
+    print("-" * 60)
+    print(row["body"])
+
+
+def cmd_approve(args):
+    conn = db()
+    row = one(conn, "select * from drafts where id=?", (args.id,))
+    if not row:
+        sys.exit(f"error: no draft {args.id}")
+    conn.execute("update drafts set status='approved', approved_by=? where id=?", (args.by, args.id))
+    audit(conn, row["thread_id"], "approved", f"Draft #{args.id} approved by {args.by}")
+    conn.commit()
+    print(f"draft #{args.id} approved by {args.by}")
+
+
+def cmd_send(args):
+    conn = db()
+    t = must_thread(conn, args.id)
+
+    if os.environ.get("RELAY_DRAFT_ONLY") == "1":
+        sys.exit("error: RELAY_DRAFT_ONLY=1 — this run may draft but not send. "
+                 "A human must approve and send.")
+
+    if args.draft:
+        row = one(conn, "select * from drafts where id=? and thread_id=?", (args.draft, args.id))
+        if not row:
+            sys.exit(f"error: draft {args.draft} does not belong to {args.id}")
+        if row["status"] != "approved":
+            sys.exit(
+                f"error: draft #{args.draft} is {row['status']}, not approved.\n"
+                f"       run: relay approve {args.draft} --by you"
+            )
+        body = row["body"]
+        policy = {"decision": "sent_after_approval", "tier": load_config().get("autonomy"),
+                  "reasons": [f"draft #{args.draft} approved by {row['approved_by']}"]}
+    else:
+        body = sys.stdin.read() if args.stdin else (args.text or "")
+        body = body.strip()
+        if not body:
+            sys.exit("error: nothing to send (use --text, --stdin, or --draft)")
+        policy = policy_check(conn, t, body)
+        if policy["decision"] != "auto_send":
+            print(f"error: policy requires approval before sending to {args.id}", file=sys.stderr)
+            for reason in policy["reasons"] or ["autonomy policy"]:
+                print(f"  - {reason}", file=sys.stderr)
+            print(f"\n  next:\n"
+                  f"    relay draft {args.id} --text \"...\"\n"
+                  f"    relay approve <draft_id> --by you\n"
+                  f"    relay send {args.id} --draft <draft_id>", file=sys.stderr)
+            sys.exit(2)
+
+    if not body.strip():
+        sys.exit("error: nothing to send")
+
+    last = one(conn, "select direction, body, sent_at from messages where thread_id=? order by sent_at desc, id desc limit 1", (args.id,))
+    if last and last["direction"] == "out" and not args.force:
+        sys.exit(
+            f"error: last message on {args.id} is already outbound ({humanize(last['sent_at'])}).\n"
+            "       Refusing to double-send. Pass --force if this really is a new message."
+        )
+
+    cfg = load_config()
+    pacing = cfg.get("pacing") or {}
+    if not args.urgent:
+        min_gap = int(pacing.get("min_seconds_between_sends") or 0)
+        max_hour = int(pacing.get("max_sends_per_hour") or 0)
+        if min_gap:
+            prev = one(conn, "select sent_at from messages where direction='out' order by sent_at desc limit 1")
+            if prev and parse(prev["sent_at"]):
+                elapsed = (now() - parse(prev["sent_at"])).total_seconds()
+                if elapsed < min_gap:
+                    sys.exit(
+                        f"error: pacing — {int(min_gap - elapsed)}s before the next send "
+                        f"({min_gap}s minimum). Use --urgent only for a live incident."
+                    )
+        if max_hour:
+            recent = one(
+                conn,
+                "select count(*) c from messages where direction='out' and sent_at >= ?",
+                (iso(now() - timedelta(hours=1)),),
+            )["c"]
+            if recent >= max_hour:
+                sys.exit(
+                    f"error: pacing — hourly cap reached ({recent}/{max_hour}). "
+                    "Leave the rest queued; do not increase the cap to clear a backlog."
+                )
+
+    sent_at = iso(now())
+    cur = conn.execute(
+        "insert into messages(thread_id,direction,author,body,sent_at) values (?,?,?,?,?)",
+        (args.id, "out", args.by, body, sent_at),
+    )
+    conn.execute(
+        "update threads set waiting_since=null, sla_due=null, status='open', updated_at=? where id=?",
+        (sent_at, args.id),
+    )
+    if args.draft:
+        conn.execute("update drafts set status='sent' where id=?", (args.draft,))
+
+    followup_due = iso(now() + timedelta(days=2))
+    conn.execute(
+        "insert into tasks(thread_id,kind,title,due_at,status) values (?,?,?,?,?)",
+        (args.id, "followup", "Follow up if no reply", followup_due, "open"),
+    )
+
+    commitments = []
+    if args.commit:
+        due = parse_due(args.commit_due) or iso(now() + timedelta(days=1))
+        c = conn.execute(
+            "insert into commitments(thread_id,text,due_at,status,created_at) values (?,?,?,?,?)",
+            (args.id, args.commit, due, "open", sent_at),
+        )
+        commitments.append({"id": c.lastrowid, "text": args.commit, "due_at": due})
+
+    audit(conn, args.id, "sent", f"Reply sent by {args.by} ({len(body)} chars) — {policy['decision']}")
+    conn.commit()
+
+    print(json.dumps({
+        "ok": True, "thread": args.id, "message_id": cur.lastrowid, "sent_at": sent_at,
+        "policy": policy, "followup_due": followup_due, "commitments": commitments,
+        "next": "relay due",
+    }, indent=2))
+
+
+def cmd_log(args):
+    conn = db()
+    must_thread(conn, args.id)
+    if args.kind == "commitment":
+        due = parse_due(args.due) or iso(now() + timedelta(days=1))
+        conn.execute(
+            "insert into commitments(thread_id,text,due_at,status,created_at) values (?,?,?,?,?)",
+            (args.id, args.text, due, "open", iso(now())),
+        )
+    elif args.kind == "stage":
+        conn.execute(
+            "update threads set summary=coalesce(summary,'') where id=?", (args.id,)
+        )
+    audit(conn, args.id, args.kind, args.text)
+    conn.commit()
+    print(f"logged {args.kind} on {args.id}")
+
+
+def cmd_resolve(args):
+    conn = db()
+    must_thread(conn, args.id)
+    conn.execute(
+        "update threads set status='resolved', waiting_since=null, updated_at=? where id=?",
+        (iso(now()), args.id),
+    )
+    conn.execute("update tasks set status='done' where thread_id=? and kind='followup'", (args.id,))
+    audit(conn, args.id, "resolved", args.outcome or "Resolved")
+    conn.commit()
+    print(f"{args.id} resolved" + (f" — {args.outcome}" if args.outcome else ""))
+
+
+def cmd_due(args):
+    conn = db()
+    horizon = now() + timedelta(hours=args.hours)
+    out = {"commitments": [], "tasks": [], "sla": []}
+    for r in many(conn, "select c.*, t.subject, c2.name as contact from commitments c left join threads t on t.id=c.thread_id left join contacts c2 on c2.id=t.contact_id where c.status='open'"):
+        if parse(r["due_at"]) and parse(r["due_at"]) <= horizon:
+            out["commitments"].append(r)
+    for r in many(conn, "select k.*, t.subject from tasks k left join threads t on t.id=k.thread_id where k.status='open'"):
+        if parse(r["due_at"]) and parse(r["due_at"]) <= horizon:
+            out["tasks"].append(r)
+    for r in many(conn, "select t.id, t.subject, t.sla_due, c.name as contact, a.name as account from threads t left join contacts c on c.id=t.contact_id left join accounts a on a.id=t.account_id where t.status='open' and t.sla_due is not null"):
+        if parse(r["sla_due"]) and parse(r["sla_due"]) <= horizon:
+            out["sla"].append(r)
+
+    if args.json:
+        print(json.dumps(out, indent=2))
+        return
+    if not any(out.values()):
+        print(f"nothing due in the next {args.hours}h")
+        return
+    print(f"\n{BOLD}Due next {args.hours}h{RESET}  {DIM}{iso(now())}{RESET}\n")
+    for r in out["sla"]:
+        late = "BREACHED" if parse(r["sla_due"]) < now() else "due"
+        print(f"  {RED if late=='BREACHED' else AMBER}SLA {late}{RESET}  {r['contact']} · {r['account']} — {r['subject']} ({humanize(r['sla_due'])})")
+    for r in out["commitments"]:
+        print(f"  {AMBER}promise{RESET}   #{r['id']} {r['text']} — due {humanize(r['due_at'])}")
+    for r in out["tasks"]:
+        print(f"  {DIM}task{RESET}      #{r['id']} {r['title']} — due {humanize(r['due_at'])}")
+    print()
+
+
+def cmd_brief(_args):
+    conn = db()
+    threads = many(conn, """select t.*, a.name as account, a.mrr, a.health, c.name as contact, c.sentiment
+                            from threads t left join accounts a on a.id=t.account_id
+                            left join contacts c on c.id=t.contact_id
+                            where t.status='open'""")
+    ranked = sorted(((score(t)[0], t) for t in threads), key=lambda x: x[0], reverse=True)
+    mrr = sum(t["mrr"] or 0 for _, t in ranked)
+    waiting = sum(1 for _, t in ranked if t["waiting_since"])
+    hours = now().strftime("%H:%M")
+
+    print(f"\n{BOLD}RELAY BRIEF{RESET}  {DIM}{now():%a %d %b} · {hours} UTC{RESET}")
+    print(f"{len(ranked)} open · {waiting} awaiting reply · ${mrr:,.0f} MRR in play\n")
+
+    print(f"{BOLD}Do these first{RESET}")
+    for i, (s, t) in enumerate(ranked[:3], 1):
+        why = " · ".join(score(t)[1][:3])
+        print(f"  {i}. {t['contact']} {DIM}({t['account']}){RESET} — {t['subject']}")
+        print(f"     {DIM}{why}{RESET}")
+
+    at_risk = [t for _, t in ranked if t["health"] == "at_risk"]
+    if at_risk:
+        print(f"\n{BOLD}At risk{RESET}")
+        for t in at_risk:
+            print(f"  {RED}●{RESET} {t['account']} — ${t['mrr']:,.0f}/mo — {t['summary']}")
+
+    horizon = now() + timedelta(hours=24)
+    promises = [r for r in many(conn, "select * from commitments where status='open'")
+                if parse(r["due_at"]) and parse(r["due_at"]) <= horizon]
+    if promises:
+        print(f"\n{BOLD}Promises due within 24h{RESET}")
+        for r in promises:
+            print(f"  · {r['text']} {DIM}({humanize(r['due_at'])}){RESET}")
+
+    print(f"\n{DIM}relay queue · relay thread <id> · relay due{RESET}\n")
+
+def cmd_search(args):
+    conn = db()
+    q = f"%{args.query}%"
+    rows = many(
+        conn,
+        """select distinct t.id, t.subject, a.name as account, c.name as contact
+           from threads t
+           left join accounts a on a.id=t.account_id
+           left join contacts c on c.id=t.contact_id
+           left join messages m on m.thread_id=t.id
+           where t.subject like ? or a.name like ? or c.name like ? or m.body like ?
+           limit 20""",
+        (q, q, q, q),
+    )
+    if not rows:
+        print("no matches")
+        return
+    for r in rows:
+        print(f"{r['id']:12} {r['contact']} · {r['account']} — {r['subject']}")
+
+
+def cmd_ingest(args):
+    """Upsert a normalised CRM payload (webhook, API poll, or export)."""
+    raw = sys.stdin.read() if args.stdin else Path(args.file).read_text()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        sys.exit(f"error: invalid JSON — {e}")
+
+    conn = db()
+    a = payload.get("account") or {}
+    c = payload.get("contact") or {}
+    t = payload.get("thread") or {}
+    msgs = payload.get("messages") or []
+    if not t.get("id"):
+        sys.exit("error: payload.thread.id is required")
+
+    ensure_party(conn, a, c)
+
+    conn.execute(
+        """insert into threads(id,account_id,contact_id,subject,channel,status,waiting_since,
+                               sla_due,assignee,summary,tags,updated_at)
+           values (?,?,?,?,?,?,?,?,?,?,?,?)
+           on conflict(id) do update set
+             subject=excluded.subject, channel=excluded.channel, waiting_since=excluded.waiting_since,
+             sla_due=excluded.sla_due, assignee=excluded.assignee, summary=excluded.summary,
+             tags=excluded.tags, updated_at=excluded.updated_at""",
+        (t["id"], a.get("id"), c.get("id"), t.get("subject", "(no subject)"),
+         t.get("channel", "email"), t.get("status", "open"), t.get("waiting_since"),
+         t.get("sla_due"), t.get("assignee"), t.get("summary"),
+         json.dumps(t.get("tags") or []), iso(now())),
+    )
+
+    added = sum(1 for m in msgs if store_message(conn, t["id"], m))
+
+    audit(conn, t["id"], "ingested", f"{added} new message(s) via {args.source}")
+    conn.commit()
+
+    if t.get("waiting_since") and added:
+        conn.execute(
+            "update threads set waiting_since=? where id=? and (waiting_since is null or waiting_since > ?)",
+            (t["waiting_since"], t["id"], t["waiting_since"]),
+        )
+        conn.commit()
+
+    print(json.dumps({"ok": True, "thread": t["id"], "messages_added": added,
+                      "source": args.source}, indent=2))
+
+
+def cmd_sync(args):
+    """Diff an inbox snapshot into the store. Safe to run repeatedly (idempotent)."""
+    raw = sys.stdin.read() if args.stdin else Path(args.file).read_text()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        sys.exit(f"error: invalid JSON — {e}")
+
+    threads = payload.get("threads") or []
+    if not threads:
+        sys.exit("error: snapshot has no threads")
+
+    cfg = load_config()
+    conn = db()
+    src = payload.get("source", args.source)
+    report = {"source": src, "threads_seen": len(threads), "new_threads": [],
+              "new_messages": [], "reopened": [], "unchanged": 0, "errors": []}
+
+    for item in threads:
+        tid = item.get("id")
+        if not tid:
+            report["errors"].append("thread without id skipped")
+            continue
+        a, c = item.get("account"), item.get("contact")
+        ensure_party(conn, a, c)
+        existing = one(conn, "select * from threads where id=?", (tid,))
+        changed = existing is None
+
+        if not existing:
+            conn.execute(
+                """insert into threads(id,account_id,contact_id,subject,channel,status,
+                                       waiting_since,sla_due,assignee,summary,tags,updated_at)
+                   values (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (tid, (a or {}).get("id"), (c or {}).get("id"),
+                 item.get("subject", "(no subject)"), item.get("channel", "email"),
+                 item.get("status", "open"), None, item.get("sla_due"),
+                 item.get("assignee"), item.get("summary"),
+                 json.dumps(item.get("tags") or []), iso(now())),
+            )
+            report["new_threads"].append({
+                "thread": tid, "subject": item.get("subject"),
+                "contact": (c or {}).get("name"), "company": (a or {}).get("name"),
+            })
+            audit(conn, tid, "sync", f"New thread spotted via {src}")
+        else:
+            if item.get("subject"):
+                conn.execute("update threads set subject=? where id=?", (item["subject"], tid))
+            if item.get("assignee"):
+                conn.execute("update threads set assignee=? where id=?", (item["assignee"], tid))
+            if item.get("summary"):
+                conn.execute("update threads set summary=? where id=?", (item["summary"], tid))
+            if item.get("sla_due"):
+                conn.execute("update threads set sla_due=? where id=?", (item["sla_due"], tid))
+            if item.get("tags") is not None:
+                conn.execute("update threads set tags=? where id=?", (json.dumps(item["tags"]), tid))
+
+        added = [m for m in (item.get("messages") or []) if store_message(conn, tid, m)]
+        if added:
+            changed = True
+            preview = " ".join((added[-1].get("body") or "").split())[:110]
+            report["new_messages"].append({
+                "thread": tid, "count": len(added),
+                "contact": (c or {}).get("name") or existing.get("contact_id") if existing else (c or {}).get("name"),
+                "preview": preview,
+            })
+            audit(conn, tid, "sync", f"{len(added)} new message(s) via {src}")
+
+        last_in = one(conn, "select sent_at from messages where thread_id=? and direction='in' order by sent_at desc limit 1", (tid,))
+        last_out = one(conn, "select sent_at from messages where thread_id=? and direction='out' order by sent_at desc limit 1", (tid,))
+        in_ts = parse(last_in["sent_at"]) if last_in else None
+        out_ts = parse(last_out["sent_at"]) if last_out else None
+
+        if in_ts and (not out_ts or in_ts > out_ts):
+            waited = last_in["sent_at"]
+            sla = item.get("sla_due") or (existing or {}).get("sla_due")
+            if not sla or (parse(sla) and parse(sla) < parse(waited)):
+                sla = iso(parse(waited) + timedelta(hours=cfg.get("first_response_hours", 4)))
+            if existing and existing.get("status") == "resolved":
+                report["reopened"].append(tid)
+                changed = True
+                audit(conn, tid, "reopened", "Customer replied after resolution")
+            conn.execute(
+                "update threads set waiting_since=?, sla_due=?, status='open', updated_at=? where id=?",
+                (waited, sla, iso(now()), tid),
+            )
+        elif out_ts and (not in_ts or out_ts > in_ts):
+            conn.execute(
+                "update threads set waiting_since=null, sla_due=null, updated_at=? where id=?",
+                (iso(now()), tid),
+            )
+        else:
+            pass
+
+        if not changed:
+            report["unchanged"] += 1
+
+    conn.commit()
+
+    if args.text:
+        print(f"\n{BOLD}SYNC{RESET} {src} · {report['threads_seen']} threads · "
+              f"{GREEN}{len(report['new_threads'])} new{RESET} · "
+              f"{AMBER}{len(report['new_messages'])} with new messages{RESET} · "
+              f"{len(report['reopened'])} reopened · {report['unchanged']} unchanged\n")
+        for t in report["new_threads"]:
+            print(f"  {GREEN}NEW{RESET}  {t['thread']} · {t.get('contact') or 'unknown'} "
+                  f"{('(' + t['company'] + ')') if t.get('company') else ''} — {t.get('subject')}")
+        for m in report["new_messages"]:
+            print(f"  {AMBER}MSG{RESET}  {m['thread']} · {m['count']} new — {m['preview']}")
+        for tid in report["reopened"]:
+            print(f"  {AMBER}REOPEN{RESET} {tid} — customer replied after resolution")
+        if not (report["new_threads"] or report["new_messages"] or report["reopened"]):
+            print(f"  {DIM}no changes{RESET}")
+        print()
+    else:
+        print(json.dumps(report, indent=2))
+
+
+def cmd_alerts(args):
+    """Machine- or human-readable monitoring feed. Exit 3 on breach with --fail-on-breach."""
+    conn = db()
+    cfg = load_config()
+    horizon = now() + timedelta(hours=24)
+    rows = many(
+        conn,
+        """select t.*, a.name as account, a.mrr, a.health, c.name as contact
+           from threads t
+           left join accounts a on a.id=t.account_id
+           left join contacts c on c.id=t.contact_id
+           where t.status='open'""",
+    )
+    waiting = [t for t in rows if t["waiting_since"]]
+    breached = [t for t in waiting if t["sla_due"] and parse(t["sla_due"]) < now()]
+    due_soon = [t for t in waiting if t["sla_due"] and now() <= parse(t["sla_due"]) <= now() + timedelta(hours=1)]
+    unassigned = [t for t in waiting if not t["assignee"] or t["assignee"] == "Unassigned"]
+    promises = [r for r in many(conn, "select * from commitments where status='open'")
+                if parse(r["due_at"]) and parse(r["due_at"]) <= horizon]
+    followups = [r for r in many(conn, "select * from tasks where status='open' and kind='followup'")
+                 if parse(r["due_at"]) and parse(r["due_at"]) <= now()]
+    overdue_promises = [p for p in promises if parse(p["due_at"]) < now()]
+
+    out = {
+        "at": iso(now()), "waiting": len(waiting), "breached": breached,
+        "due_soon": due_soon, "unassigned": unassigned,
+        "promises": promises, "followups": followups,
+    }
+
+    if args.json:
+        print(json.dumps(out, indent=2))
+    else:
+        print(f"\n{BOLD}MONITOR{RESET}  {DIM}{now():%a %d %b · %H:%M} UTC{RESET}")
+        print(f"{len(waiting)} awaiting reply · {RED if breached else DIM}{len(breached)} SLA breached{RESET} · "
+              f"{len(unassigned)} unassigned · {len(promises)} promises due\n")
+        for t in breached:
+            late = (now() - parse(t["sla_due"])).total_seconds() / 60
+            print(f"  {RED}BREACH{RESET} {t['contact']} · {t['account']} — "
+                  f"{humanize(t['waiting_since'])} waiting — SLA {int(late)}m overdue")
+        for t in due_soon:
+            if t not in breached:
+                print(f"  {AMBER}DUE{RESET}    {t['contact']} · {t['account']} — "
+                      f"{humanize_future((parse(t['sla_due']) - now()).total_seconds())} left")
+        for t in unassigned:
+            if t not in breached and t not in due_soon:
+                print(f"  {DIM}UNOWNED{RESET} {t['contact']} · {t['account']}")
+        for p in promises:
+            late = "overdue " if parse(p["due_at"]) < now() else ""
+            print(f"  {AMBER}PROMISE{RESET} #{p['id']} {p['text']} — {late}{humanize(p['due_at'])}")
+        for f in followups:
+            print(f"  {DIM}FOLLOWUP{RESET} #{f['id']} {f['title']} — {humanize(f['due_at'])}")
+        if not (breached or due_soon or unassigned or promises or followups):
+            print(f"  {DIM}all clear{RESET}")
+        print()
+
+    if args.fail_on_breach and (breached or overdue_promises):
+        sys.exit(3)
+
+
+def cmd_serve(args):
+    """Local webhook receiver: CRM pushes, Relay diffs, returns what changed."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    secret = args.secret or os.environ.get("RELAY_WEBHOOK_SECRET")
+    if args.host not in ("127.0.0.1", "localhost", "::1") and not secret:
+        sys.exit("error: refusing to bind a public interface without --secret")
+
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock = DB_PATH.parent / "hook.lock"
+
+    def fire_hook(report):
+        """One run at a time; a second webhook does not stack a second agent."""
+        if not args.on_change:
+            return
+        ids = [t["thread"] for t in report.get("new_threads", [])]
+        ids += [m["thread"] for m in report.get("new_messages", [])]
+        ids += report.get("reopened", [])
+        ids = list(dict.fromkeys(ids))
+        if lock.exists():
+            if (now().timestamp() - lock.stat().st_mtime) > args.lock_seconds:
+                lock.unlink(missing_ok=True)
+            else:
+                sys.stderr.write("webhook: hook already running, change stays queued\n")
+                return
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+        except FileExistsError:
+            return
+        env = os.environ.copy()
+        env["RELAY_CHANGED_THREADS"] = ",".join(ids)
+        env["RELAY_SOURCE"] = args.source
+        if not args.allow_send:
+            env["RELAY_DRAFT_ONLY"] = "1"
+        script = f"{args.on_change}\nrm -f {shlex.quote(str(lock))}"
+        subprocess.Popen(["sh", "-c", script], cwd=str(ROOT), env=env,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        sys.stderr.write(f"webhook: hook fired for {','.join(ids)}\n")
+
+    class Handler(BaseHTTPRequestHandler):
+        def _reply(self, code, payload):
+            body = json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path == "/health":
+                self._reply(200, {"ok": True, "db": str(DB_PATH)})
+            else:
+                self._reply(404, {"ok": False, "error": "not found"})
+
+        def do_POST(self):
+            if self.path != "/hook":
+                return self._reply(404, {"ok": False, "error": "not found"})
+            if secret and self.headers.get("X-Relay-Secret") != secret:
+                return self._reply(401, {"ok": False, "error": "bad secret"})
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                payload = json.loads(self.rfile.read(length))
+            except (ValueError, json.JSONDecodeError):
+                return self._reply(400, {"ok": False, "error": "invalid json"})
+
+            mode = "sync" if "threads" in payload else "ingest"
+            proc = subprocess.run(
+                [sys.executable, str(ROOT / "relay"), mode, "--stdin"],
+                input=json.dumps(payload), text=True, capture_output=True,
+                env=os.environ.copy(),
+            )
+            if proc.returncode != 0:
+                return self._reply(422, {"ok": False,
+                                         "error": (proc.stderr or proc.stdout).strip()[:800]})
+            try:
+                report = json.loads(proc.stdout)
+            except json.JSONDecodeError:
+                report = {"raw": proc.stdout}
+            changed = bool(
+                report.get("new_threads") or report.get("new_messages")
+                or report.get("reopened")
+                or (mode == "ingest" and report.get("messages_added"))
+            )
+            if changed:
+                fire_hook(report)
+            self._reply(200, {"ok": True, "mode": mode, "changed": changed, "report": report})
+
+        def log_message(self, fmt, *a):
+            sys.stderr.write("webhook " + (fmt % a) + "\n")
+
+    print(f"relay webhook listening on http://{args.host}:{args.port}/hook\n"
+          f"  db: {DB_PATH}\n  secret: {'set' if secret else 'none (loopback only)'}\n"
+          f"  on-change: {args.on_change or 'none (poll relay alerts)'}\n"
+          f"  POST a snapshot with 'threads' or a single thread payload; returns changed:true|false")
+    ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
+
+
+def cmd_connectors(_args):
+    files = sorted((ROOT / "connectors").glob("*.json"))
+    if not files:
+        print("no connectors installed")
+        return
+    print(f"\n{BOLD}Connectors{RESET} {DIM}· selector maps + flows; verify on first run{RESET}\n")
+    for f in files:
+        try:
+            data = json.loads(f.read_text())
+        except json.JSONDecodeError:
+            print(f"  {f.stem}: invalid JSON")
+            continue
+        status = "verified" if data.get("verified") else "template — verify selectors"
+        print(f"  {f.stem:12} {data.get('name','?'):24} {DIM}{status}{RESET}")
+
+
+def cmd_connector(args):
+    path = ROOT / "connectors" / f"{args.name}.json"
+    if not path.exists():
+        sys.exit(f"error: no connector '{args.name}' (try: relay connectors)")
+    print(path.read_text())
+
+
+def read_doc(name):
+    path = ROOT / name
+    if not path.exists():
+        sys.exit(f"error: {name} is missing from {ROOT}")
+    return path.read_text()
+
+
+def cmd_soul(args):
+    text = read_doc("soul.md")
+    if args.with_lessons:
+        conn = db()
+        rows = many(conn, "select id,scope,text,evidence from lessons where status='active' order by id")
+        text += "\n\n---\n\n## Active lessons (learned on the desk)\n\n"
+        if rows:
+            for lesson in rows:
+                text += f"- **[{lesson['scope']}]** {lesson['text']}"
+                if lesson["evidence"]:
+                    text += f" _(evidence: {lesson['evidence']})_"
+                text += "\n"
+        else:
+            text += "None promoted yet.\n"
+    print(text)
+
+
+def cmd_script(_args):
+    print(read_doc("script.md"))
+
+
+def cmd_feedback(args):
+    conn = db()
+    must_thread(conn, args.thread)
+    if not 1 <= args.rating <= 5:
+        sys.exit("error: rating must be 1–5")
+    cur = conn.execute(
+        "insert into feedback(thread_id,message_id,source,rating,tags,note,created_at) values (?,?,?,?,?,?,?)",
+        (args.thread, args.message, args.source, args.rating, args.tags, args.note, iso(now())),
+    )
+    audit(conn, args.thread, "feedback",
+          f"{args.source} rated {args.rating}/5" + (f" [{args.tags}]" if args.tags else ""))
+    conn.commit()
+    print(f"feedback #{cur.lastrowid} recorded for {args.thread} ({args.rating}/5)")
+
+
+def cmd_lesson_add(args):
+    conn = db()
+    evidence = [x.strip() for x in (args.evidence or "").split(",") if x.strip()]
+    for tid in evidence:
+        must_thread(conn, tid)
+    status = "active" if args.promote else "proposed"
+    cur = conn.execute(
+        """insert into lessons(scope,text,evidence,status,created_at,promoted_at,promoted_by)
+           values (?,?,?,?,?,?,?)""",
+        (args.scope, args.text, ",".join(evidence), status, iso(now()),
+         iso(now()) if status == "active" else None,
+         args.by if status == "active" else None),
+    )
+    audit(conn, evidence[0] if evidence else None, "lesson",
+          f"Lesson #{cur.lastrowid} {status}: {args.text}")
+    conn.commit()
+    print(f"lesson #{cur.lastrowid} {status} [{args.scope}]")
+    if status == "proposed":
+        print(f"  promote: relay lesson promote {cur.lastrowid} --by you")
+
+
+def cmd_lesson_promote(args):
+    conn = db()
+    row = one(conn, "select * from lessons where id=?", (args.id,))
+    if not row:
+        sys.exit(f"error: no lesson {args.id}")
+    conn.execute(
+        "update lessons set status='active', promoted_at=?, promoted_by=? where id=?",
+        (iso(now()), args.by, args.id),
+    )
+    audit(conn, (row["evidence"] or "").split(",")[0] or None, "lesson",
+          f"Lesson #{args.id} promoted by {args.by}")
+    conn.commit()
+    print(f"lesson #{args.id} promoted by {args.by} — loaded on next shift")
+
+
+def cmd_lesson_retire(args):
+    conn = db()
+    if not one(conn, "select id from lessons where id=?", (args.id,)):
+        sys.exit(f"error: no lesson {args.id}")
+    conn.execute("update lessons set status='retired' where id=?", (args.id,))
+    conn.commit()
+    print(f"lesson #{args.id} retired")
+
+
+def cmd_lessons(args):
+    conn = db()
+    where, params = ("", ()) if args.status == "all" else ("where status=?", (args.status,))
+    rows = many(conn, f"select * from lessons {where} order by id", params)
+    if not rows:
+        print(f"no {args.status if args.status != 'all' else ''} lessons")
+        return
+    print()
+    for r in rows:
+        mark = {"active": GREEN + "●" + RESET, "proposed": AMBER + "○" + RESET,
+                "retired": DIM + "·" + RESET}[r["status"]]
+        print(f"  {mark} #{r['id']} [{r['scope']}] {r['text']}")
+        meta = f"      {r['status']}"
+        if r["evidence"]:
+            meta += f" · evidence {r['evidence']}"
+        if r["promoted_by"]:
+            meta += f" · promoted by {r['promoted_by']}"
+        print(f"{DIM}{meta}{RESET}")
+    print()
+
+
+def cmd_learn(_args):
+    conn = db()
+    fb = many(conn, "select * from feedback order by id desc")
+    total = len(fb)
+    avg = (sum(f["rating"] or 0 for f in fb) / total) if total else 0
+    out_threads = one(conn, "select count(distinct thread_id) c from messages where direction='out'")["c"]
+    answered = one(
+        conn,
+        """select count(distinct m.thread_id) c from messages m
+           where m.direction='out' and exists (
+             select 1 from messages i where i.thread_id=m.thread_id
+             and i.direction='in' and i.sent_at > m.sent_at)""",
+    )["c"]
+    rate = round(100 * answered / out_threads) if out_threads else 0
+
+    friction = {}
+    for f in fb:
+        if (f["rating"] or 5) <= 3 and f["tags"]:
+            for tag in f["tags"].split(","):
+                tag = tag.strip()
+                if tag:
+                    friction[tag] = friction.get(tag, 0) + 1
+
+    active = one(conn, "select count(*) c from lessons where status='active'")["c"]
+    proposed = many(conn, "select id,scope,text from lessons where status='proposed' order by id")
+
+    print(f"\n{BOLD}LEARNING REPORT{RESET}  {DIM}{now():%a %d %b · %H:%M} UTC{RESET}")
+    print(f"feedback {total}  ·  avg {avg:.1f}/5  ·  "
+          f"human {sum(1 for f in fb if f['source']=='human')}  ·  "
+          f"customer {sum(1 for f in fb if f['source']=='customer')}")
+    print(f"reply → customer response: {rate}% ({answered}/{out_threads} outbound threads)")
+
+    if friction:
+        top = sorted(friction.items(), key=lambda x: -x[1])
+        print(f"{BOLD}Friction tags{RESET}  " + " · ".join(f"{k} ×{v}" for k, v in top[:5]))
+        for tag, count in top[:2]:
+            if count >= 2:
+                print(f"  {AMBER}{tag}{RESET} flagged {count}× — worth a lesson: "
+                      f"relay lesson add --scope voice --text \"...\" --evidence <ids>")
+
+    print(f"\n{BOLD}Lessons{RESET}  {active} active · {len(proposed)} proposed")
+    for p in proposed:
+        print(f"  ○ #{p['id']} [{p['scope']}] {p['text']}")
+    print(f"{DIM}  promote: relay lesson promote <id> --by you{RESET}")
+    print(f"{DIM}  active lessons load with: relay soul --with-lessons{RESET}\n")
+
+
+CONTROL_ALTERNATIVES = {
+    "inbox_row": ["inbox_row", "ticket_row"],
+    "thread_subject": ["thread_subject", "ticket_subject"],
+    "message": ["message"],
+    "reply_box": ["reply_box"],
+    "send_button": ["send_button"],
+}
+
+
+def cmd_doctor(args):
+    problems, warnings, oks = [], [], []
+
+    for doc in ("soul.md", "script.md", "PLAYBOOK.md"):
+        (oks if (ROOT / doc).exists() else problems).append(f"{doc} present")
+
+    cfg = load_config()
+    if cfg.get("autonomy") in ("suggest", "approve", "auto"):
+        oks.append(f"autonomy={cfg['autonomy']}")
+    else:
+        problems.append(f"invalid autonomy: {cfg.get('autonomy')}")
+    if cfg.get("code_autonomy", "branch") in ("suggest", "branch", "main"):
+        oks.append(f"code_autonomy={cfg.get('code_autonomy', 'branch')}")
+    else:
+        problems.append(f"invalid code_autonomy: {cfg.get('code_autonomy')}")
+    if not cfg.get("pacing"):
+        warnings.append("no pacing configured")
+
+    conn = db()
+    integrity = conn.execute("pragma integrity_check").fetchone()[0]
+    (oks if integrity == "ok" else problems).append(f"db integrity: {integrity}")
+
+    files = ([ROOT / "connectors" / f"{args.connector}.json"] if args.connector
+             else sorted((ROOT / "connectors").glob("*.json")))
+    if args.connector and not files[0].exists():
+        problems.append(f"connector not found: {args.connector}")
+    for path in files:
+        try:
+            data = json.loads(path.read_text())
+        except json.JSONDecodeError as e:
+            problems.append(f"{path.name}: invalid JSON ({e})")
+            continue
+        selectors = data.get("selectors") or {}
+        missing = [
+            logical for logical, alts in CONTROL_ALTERNATIVES.items()
+            if not any(a in selectors for a in alts)
+        ]
+        if missing:
+            problems.append(f"{path.name}: missing controls {', '.join(missing)}")
+        else:
+            oks.append(f"{path.name}: required controls present")
+        if not data.get("urls"):
+            warnings.append(f"{path.name}: no inbox URL")
+        if not data.get("flows"):
+            warnings.append(f"{path.name}: no flows")
+        if not data.get("quirks"):
+            warnings.append(f"{path.name}: no quirks documented")
+        if data.get("verified") is False:
+            warnings.append(f"{path.name}: unverified — dry-run before use")
+
+    print(f"\n{BOLD}DOCTOR{RESET}  {DIM}{ROOT}{RESET}\n")
+    for line in oks:
+        print(f"  {GREEN}ok{RESET}    {line}")
+    for line in warnings:
+        print(f"  {AMBER}warn{RESET}  {line}")
+    for line in problems:
+        print(f"  {RED}fail{RESET}  {line}")
+    print(f"\n{len(oks)} ok · {len(warnings)} warnings · {len(problems)} problems\n")
+    if problems:
+        sys.exit(1)
+
+
+def cmd_selftest(_args):
+    proc = subprocess.run(
+        [sys.executable, "-m", "unittest", "discover", "-s", str(ROOT / "tests"), "-v"],
+        cwd=str(ROOT),
+    )
+    sys.exit(proc.returncode)
+
+
+def cmd_stats(_args):
+    conn = db()
+    counts = {
+        "accounts": one(conn, "select count(*) c from accounts")["c"],
+        "contacts": one(conn, "select count(*) c from contacts")["c"],
+        "threads_open": one(conn, "select count(*) c from threads where status='open'")["c"],
+        "messages": one(conn, "select count(*) c from messages")["c"],
+        "commitments_open": one(conn, "select count(*) c from commitments where status='open'")["c"],
+        "drafts_pending": one(conn, "select count(*) c from drafts where status='pending'")["c"],
+        "events": one(conn, "select count(*) c from events")["c"],
+    }
+    print(json.dumps(counts, indent=2))
+
+
+# ---------------------------------------------------------------- cli
+def main():
+    p = argparse.ArgumentParser(prog="relay", description="CRM memory + ops for an OpenCode agent")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("init", help="create the database").set_defaults(fn=cmd_init)
+
+    s = sub.add_parser("seed-demo", help="load the demo CRM dataset")
+    s.add_argument("--reset", action="store_true")
+    s.set_defaults(fn=cmd_seed)
+
+    s = sub.add_parser("queue", help="ranked work queue (what to do next)")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--limit", type=int, default=10)
+    s.set_defaults(fn=cmd_queue)
+
+    s = sub.add_parser("thread", help="full context bundle for one thread (JSON)")
+    s.add_argument("id")
+    s.set_defaults(fn=cmd_thread)
+
+    s = sub.add_parser("draft", help="save a reply draft for approval")
+    s.add_argument("id")
+    s.add_argument("--text")
+    s.add_argument("--stdin", action="store_true")
+    s.add_argument("--by", default="agent")
+    s.set_defaults(fn=cmd_draft)
+
+    s = sub.add_parser("draft-show", help="print a draft")
+    s.add_argument("id", type=int)
+    s.set_defaults(fn=cmd_draft_show)
+
+    s = sub.add_parser("approve", help="approve a draft")
+    s.add_argument("id", type=int)
+    s.add_argument("--by", default="human")
+    s.set_defaults(fn=cmd_approve)
+
+    s = sub.add_parser("send", help="record a sent reply + schedule follow-up")
+    s.add_argument("id")
+    s.add_argument("--text")
+    s.add_argument("--stdin", action="store_true")
+    s.add_argument("--draft", type=int)
+    s.add_argument("--by", default="agent")
+    s.add_argument("--commit", help="promise made in this reply")
+    s.add_argument("--commit-due", help="4h, 2d or ISO")
+    s.add_argument("--force", action="store_true", help="allow consecutive outbound messages (not a policy override)")
+    s.add_argument("--urgent", action="store_true", help="bypass pacing for a live incident (logged)")
+    s.set_defaults(fn=cmd_send)
+
+    s = sub.add_parser("check", help="dry-run the autonomy policy for a reply")
+    s.add_argument("id")
+    s.add_argument("--text")
+    s.add_argument("--stdin", action="store_true")
+    s.set_defaults(fn=cmd_check)
+
+    s = sub.add_parser("log", help="log a note, stage move, or commitment")
+    s.add_argument("id")
+    s.add_argument("--kind", choices=["note", "stage", "commitment", "tag"], default="note")
+    s.add_argument("--text", required=True)
+    s.add_argument("--due")
+    s.set_defaults(fn=cmd_log)
+
+    s = sub.add_parser("resolve", help="close a thread")
+    s.add_argument("id")
+    s.add_argument("--outcome")
+    s.set_defaults(fn=cmd_resolve)
+
+    s = sub.add_parser("due", help="SLA breaches, promises and tasks due")
+    s.add_argument("--hours", type=int, default=24)
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_due)
+
+    sub.add_parser("brief", help="daily brief").set_defaults(fn=cmd_brief)
+
+    s = sub.add_parser("search", help="search customers and message text")
+    s.add_argument("query")
+    s.set_defaults(fn=cmd_search)
+
+    sub.add_parser("connectors", help="list CRM connectors").set_defaults(fn=cmd_connectors)
+
+    s = sub.add_parser("ingest", help="upsert a normalised CRM webhook/API payload")
+    s.add_argument("file", nargs="?")
+    s.add_argument("--stdin", action="store_true")
+    s.add_argument("--source", default="webhook")
+    s.set_defaults(fn=cmd_ingest)
+
+    s = sub.add_parser("sync", help="diff an inbox snapshot into the store (idempotent)")
+    s.add_argument("file", nargs="?")
+    s.add_argument("--stdin", action="store_true")
+    s.add_argument("--source", default="poll")
+    s.add_argument("--text", action="store_true")
+    s.set_defaults(fn=cmd_sync)
+
+    s = sub.add_parser("alerts", help="monitoring feed: breaches, unowned, promises, follow-ups")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--fail-on-breach", action="store_true", help="exit 3 if SLA breached or promise overdue")
+    s.set_defaults(fn=cmd_alerts)
+
+    s = sub.add_parser("serve", help="webhook receiver for live inbound")
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", type=int, default=8787)
+    s.add_argument("--secret")
+    s.add_argument("--on-change", help="shell command to run once per batch of changes")
+    s.add_argument("--lock-seconds", type=int, default=600, help="stale hook lock timeout")
+    s.add_argument("--allow-send", action="store_true",
+                   help="do not set RELAY_DRAFT_ONLY for the hook run")
+    s.set_defaults(fn=cmd_serve, source="webhook")
+
+    s = sub.add_parser("soul", help="print the agent identity (load every shift)")
+    s.add_argument("--with-lessons", action="store_true", help="append active learned lessons")
+    s.set_defaults(fn=cmd_soul)
+
+    sub.add_parser("script", help="print the conversation script").set_defaults(fn=cmd_script)
+
+    s = sub.add_parser("feedback", help="rate a reply / capture a correction")
+    s.add_argument("thread")
+    s.add_argument("--rating", type=int, required=True)
+    s.add_argument("--source", choices=["human", "customer", "review"], default="human")
+    s.add_argument("--tags", help="comma-separated, e.g. tone,accuracy")
+    s.add_argument("--note")
+    s.add_argument("--message", type=int)
+    s.set_defaults(fn=cmd_feedback)
+
+    s = sub.add_parser("lesson", help="propose, promote or retire a learned lesson")
+    lsub = s.add_subparsers(dest="lesson_cmd", required=True)
+    a = lsub.add_parser("add")
+    a.add_argument("--scope", choices=["voice", "policy", "product", "flow"], default="voice")
+    a.add_argument("--text", required=True)
+    a.add_argument("--evidence", help="comma-separated thread ids")
+    a.add_argument("--promote", action="store_true", help="activate immediately (human action)")
+    a.add_argument("--by", default="human")
+    a.set_defaults(fn=cmd_lesson_add)
+    a = lsub.add_parser("promote")
+    a.add_argument("id", type=int)
+    a.add_argument("--by", default="human")
+    a.set_defaults(fn=cmd_lesson_promote)
+    a = lsub.add_parser("retire")
+    a.add_argument("id", type=int)
+    a.set_defaults(fn=cmd_lesson_retire)
+
+    s = sub.add_parser("lessons", help="list lessons")
+    s.add_argument("--status", choices=["active", "proposed", "retired", "all"], default="all")
+    s.set_defaults(fn=cmd_lessons)
+
+    sub.add_parser("learn", help="learning scoreboard + lesson pipeline").set_defaults(fn=cmd_learn)
+
+    s = sub.add_parser("doctor", help="validate config, docs, DB and connector controls")
+    s.add_argument("--connector")
+    s.set_defaults(fn=cmd_doctor)
+
+    sub.add_parser("selftest", help="run the core regression suite").set_defaults(fn=cmd_selftest)
+
+    s = sub.add_parser("connector", help="print a connector recipe")
+    s.add_argument("name")
+    s.set_defaults(fn=cmd_connector)
+
+    sub.add_parser("stats", help="counts").set_defaults(fn=cmd_stats)
+
+    args = p.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

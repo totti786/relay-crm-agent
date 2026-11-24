@@ -1,0 +1,58 @@
+{
+  "name": "HubSpot Inbox / Help Desk",
+  "version": 1,
+  "mode": "browser",
+  "verified": false,
+  "verified_note": "Template. Run the verify flow once per workspace; HubSpot A/B tests markup, so prefer role/text locators over CSS.",
+  "quirks": [
+    "Reply composer is contenteditable; fill may not dispatch input events — type instead.",
+    "Conversations can be email, chat or WhatsApp; check the channel before promising a response time.",
+    "Deal stage and amount live on the deal record, not the conversation.",
+    "Some inbox views paginate; a missing thread may be on page 2."
+  ],
+  "match": ["app.hubspot.com"],
+  "auth": "Browse MCP reuses the logged-in Chrome profile. Never store HubSpot cookies or private app tokens here.",
+  "urls": {
+    "inbox": "https://app.hubspot.com/inbox/{portal_id}/view/all",
+    "contact": "https://app.hubspot.com/contacts/{portal_id}/record/0-1/{contact_id}",
+    "deal": "https://app.hubspot.com/contacts/{portal_id}/record/0-3/{deal_id}"
+  },
+  "selectors": {
+    "inbox_row": "[data-test-id='conversation-list-item'], [role='listitem']",
+    "thread_subject": "[data-test-id='conversation-subject'], h1, h2",
+    "message": "[data-test-id='message'], [role='article']",
+    "message_body": "[data-test-id='message-body'], [role='article'] p",
+    "reply_box": "[contenteditable='true'][role='textbox'], textarea[placeholder*='Reply']",
+    "send_button": "role=button[name=/^Send/i]",
+    "stage_select": "role=combobox[name=/stage/i]",
+    "contact_email": "role=link[name=/@/]"
+  },
+  "flows": {
+    "verify": [
+      "browse.navigate {inbox}",
+      "browse.snapshot --interactive",
+      "for each selector above: browse.eval document.querySelectorAll(...).length and record which ones return 0",
+      "update this file with what actually matched; set verified to the date"
+    ],
+    "read_thread": [
+      "open the conversation row containing the contact name",
+      "snapshot the conversation pane; capture subject, every message, timestamps, owner, associated deal",
+      "record the HubSpot thread id from the URL so later actions target the same conversation"
+    ],
+    "send_reply": [
+      "click the reply composer, browse.type the approved reply (fill does not work on contenteditable in every HubSpot build)",
+      "click Send, then wait_for the message text to appear in the thread",
+      "relay send <thread> --text '<exact text>'"
+    ],
+    "set_stage": [
+      "open the associated deal record",
+      "change the deal stage only for stages allowed in PLAYBOOK.md",
+      "relay log <thread> --kind stage --text '<old> -> <new>'"
+    ]
+  },
+  "guardrails": [
+    "HubSpot conversations can be email, chat, or WhatsApp — check the channel chip before promising a response time.",
+    "Do not edit contact properties that marketing automation owns (lifecycle stage, lead score).",
+    "Deal amounts are human-owned; read them into context but never edit."
+  ]
+}

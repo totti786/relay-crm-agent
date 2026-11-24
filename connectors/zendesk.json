@@ -1,0 +1,52 @@
+{
+  "name": "Zendesk Agent Workspace",
+  "version": 1,
+  "mode": "browser",
+  "verified": false,
+  "verified_note": "Template. Use role-based locators; Zendesk theming varies by plan and admin customisation.",
+  "quirks": [
+    "Public reply vs internal note is a separate control — verify it before every submit.",
+    "'Submit as <status>' couples the reply with a status change.",
+    "Side conversations and CCs are separate panes; the main thread may not show everything.",
+    "SLA badges are computed; never restate a deadline the policy does not support."
+  ],
+  "match": ["*.zendesk.com/agent"],
+  "auth": "Browse MCP reuses the logged-in browser session.",
+  "urls": {
+    "views": "https://{subdomain}.zendesk.com/agent/filters/{view_id}",
+    "ticket": "https://{subdomain}.zendesk.com/agent/tickets/{ticket_id}"
+  },
+  "selectors": {
+    "ticket_row": "[data-testid='ticket-row'], [role='row']",
+    "ticket_subject": "[data-testid='ticket-subject'], h1",
+    "requester": "[data-testid='requester-name'], [aria-label*='Requester']",
+    "message": "[data-testid='comment'], [role='article']",
+    "reply_box": "[contenteditable='true'][aria-label*='Reply'], .ck-editor__editable",
+    "send_button": "role=button[name=/Submit as/i]",
+    "status_select": "role=combobox[name=/status/i]",
+    "assignee": "[data-testid='assignee-field']"
+  },
+  "flows": {
+    "verify": [
+      "navigate to a test view; snapshot --interactive; fix selectors; set verified"
+    ],
+    "read_thread": [
+      "open the ticket; snapshot the conversation; separate public replies from internal notes",
+      "capture requester, org, priority, SLA badge, tags, and any linked side conversations"
+    ],
+    "send_reply": [
+      "set the reply type to Public reply (not Internal note)",
+      "type into the editor, click Submit as <status>, wait for the comment to render",
+      "relay send <thread> --text '<exact text>'"
+    ],
+    "update_status": [
+      "change status to Pending only when the next move is the customer's",
+      "relay log <thread> --kind stage --text '<old> -> <new>'"
+    ]
+  },
+  "guardrails": [
+    "Public reply vs internal note is the highest-risk control in Zendesk; verify the mode and read the text before submitting.",
+    "Do not solve tickets that are assigned to another agent without a handoff note.",
+    "SLA badges are read-only signal; never claim a deadline the policy does not support."
+  ]
+}

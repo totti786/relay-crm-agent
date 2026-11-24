@@ -1,0 +1,40 @@
+{
+  "_comment": "Normalised inbound payload. Map your CRM webhook/API response into this shape; the browser is only needed for actions.",
+  "account": {
+    "id": "acme",
+    "name": "Acme Corp",
+    "domain": "acme.com",
+    "plan": "Scale · 50 seats",
+    "mrr": 3900,
+    "stage": "Negotiation",
+    "owner": "Alex Rivera",
+    "health": "ok"
+  },
+  "contact": {
+    "id": "jules",
+    "name": "Jules Moreau",
+    "email": "jules@acme.com",
+    "role": "VP Engineering",
+    "tz": "CET",
+    "sentiment": "Neutral"
+  },
+  "thread": {
+    "id": "t-acme-sso",
+    "subject": "SSO rollout blocked on SCIM",
+    "channel": "email",
+    "waiting_since": "2026-11-24T18:00:00Z",
+    "sla_due": "2026-11-25T10:00:00Z",
+    "assignee": "Alex Rivera",
+    "summary": "SCIM deprovisioning deletes users instead of suspending them; blocking rollout.",
+    "tags": ["Security", "SSO", "Blocking"]
+  },
+  "messages": [
+    {
+      "direction": "in",
+      "author": "Jules Moreau",
+      "body": "SCIM removed two users entirely instead of suspending them. We cannot roll out until this is fixed.",
+      "sent_at": "2026-11-24T18:00:00Z",
+      "external_id": "msg_8812"
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "name": "Intercom Inbox",
+  "version": 1,
+  "mode": "browser",
+  "verified": false,
+  "verified_note": "Template. Intercom ships frequent UI changes; verify before trusting any locator.",
+  "quirks": [
+    "Notes and replies share one composer; confirm the mode before typing.",
+    "Fin or another AI may already have replied — read the whole thread first.",
+    "Assignment matters: do not reply in a teammate's conversation without a handoff note.",
+    "Composer accepts Enter-to-send per workspace setting; verify before relying on it."
+  ],
+  "match": ["app.intercom.com"],
+  "auth": "Browse MCP reuses the logged-in browser session.",
+  "urls": {
+    "inbox": "https://app.intercom.com/a/inbox/{workspace_id}/inbox/{inbox_id}",
+    "user": "https://app.intercom.com/a/apps/{workspace_id}/users/{user_id}"
+  },
+  "selectors": {
+    "inbox_row": "[data-testid='conversation-list-item'], [role='listitem']",
+    "thread_subject": "[data-testid='conversation-title'], h1",
+    "message": "[data-testid='conversation-part'], [role='article']",
+    "reply_box": "[contenteditable='true'][aria-label*='Reply'], [data-testid='composer-input']",
+    "send_button": "role=button[name=/Send/i]",
+    "assignee": "[data-testid='assignee']",
+    "close_button": "role=button[name=/Close/i]"
+  },
+  "flows": {
+    "verify": [
+      "navigate {inbox}; snapshot --interactive",
+      "count matches per selector; fix this file; set verified"
+    ],
+    "read_thread": [
+      "open the row matching the contact",
+      "snapshot the conversation; capture all parts, internal notes (do not treat notes as customer messages), assignee, tags",
+      "read the Intercom conversation id from the URL"
+    ],
+    "send_reply": [
+      "click composer, browse.type the reply, browse.press Enter or click Send (workspace setting decides)",
+      "verify the part appears with an outbound marker",
+      "relay send <thread> --text '<exact text>'"
+    ],
+    "note": [
+      "switch composer to Note mode before typing an internal note",
+      "never put internal reasoning in Reply mode"
+    ]
+  },
+  "guardrails": [
+    "Intercom notes and replies share a composer; confirm mode before typing.",
+    "If the conversation is owned by another teammate, do not reply without assignment or an explicit handoff note.",
+    "Fin/AI answers may already have replied — read the full thread before adding a human reply."
+  ]
+}

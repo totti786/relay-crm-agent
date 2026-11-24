@@ -1,0 +1,21 @@
+{
+  "autonomy": "auto",
+  "code_autonomy": "branch",
+  "workspace": "HubSpot",
+  "daily_send_cap": 30,
+  "reply_word_limit": 180,
+  "vip_mrr_threshold": 5000,
+  "first_response_hours": 4,
+  "stale_days": 3,
+  "pacing": {
+    "min_seconds_between_sends": 20,
+    "max_sends_per_hour": 20
+  },
+  "risky_tags": ["billing", "security", "churn risk", "legal", "contract", "vip"],
+  "approval_phrases": [
+    "refund", "chargeback", "credit note", "discount", "price increase",
+    "pricing exception", "contract", "legal", "lawsuit", "indemn", "dpa",
+    "gdpr", "soc 2", "security questionnaire", "penetration test", "roadmap",
+    "sla credit", "cancel", "terminate", "delete your", "breach"
+  ]
+}

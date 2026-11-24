@@ -1,0 +1,47 @@
+{
+  "source": "hubspot-poll",
+  "threads": [
+    {
+      "id": "t-priya",
+      "subject": "Renewal invoice — VAT ID missing",
+      "assignee": "Alex Rivera",
+      "tags": ["Billing", "Expansion", "Priority"]
+    },
+    {
+      "id": "t-marcus",
+      "subject": "SAML metadata for Okta",
+      "assignee": "Alex Rivera",
+      "tags": ["Security", "SSO", "Blocking"],
+      "contact": {"id": "marcus", "name": "Marcus Feld", "email": "m.feld@northgate.dev"},
+      "messages": [
+        {
+          "direction": "in",
+          "author": "Marcus Feld",
+          "body": "Any update on the SAML metadata? Our IT window is tomorrow morning.",
+          "sent_at": "2026-11-24T19:30:00Z",
+          "external_id": "hs-msg-marcus-3"
+        }
+      ]
+    },
+    {
+      "id": "t-nadia",
+      "subject": "Trial ends tomorrow — need seats for 12",
+      "assignee": null,
+      "status": "open",
+      "sla_due": null,
+      "summary": "Trial ending; wants 12 seats and invoicing instead of card.",
+      "tags": ["Trial", "Expansion"],
+      "account": {"id": "kestrel", "name": "Kestrel Design", "domain": "kestrel.design", "plan": "Trial", "mrr": 0, "stage": "Evaluation", "owner": null, "health": "ok"},
+      "contact": {"id": "nadia", "name": "Nadia Haddad", "email": "nadia@kestrel.design", "role": "Studio lead", "tz": "CET", "sentiment": "Warm"},
+      "messages": [
+        {
+          "direction": "in",
+          "author": "Nadia Haddad",
+          "body": "Our trial ends tomorrow and the team wants to keep using it. Can we get 12 seats and pay by invoice? We can't do card.",
+          "sent_at": "2026-11-24T19:28:00Z",
+          "external_id": "hs-msg-nadia-1"
+        }
+      ]
+    }
+  ]
+}

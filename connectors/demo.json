@@ -1,0 +1,68 @@
+{
+  "name": "Relay demo desk",
+  "version": 1,
+  "mode": "browser",
+  "verified": "2026-11-24 against bundled demo (python3 -m http.server 8765 -d demo)",
+  "quirks": [
+    "Composer is a plain textarea; Ctrl/Cmd+Enter sends as well as the button.",
+    "The thread must be re-rendered after send before the message node exists.",
+    "Counts in the sidebar stay at 'open' after a reply; readiness is the badge, not the count."
+  ],
+  "match": [
+    "localhost:8765",
+    "127.0.0.1:8765"
+  ],
+  "auth": "Browse MCP drives the user's own logged-in browser. This file stores selectors only, never credentials.",
+  "urls": {
+    "inbox": "http://localhost:8765/index.html",
+    "thread": "http://localhost:8765/index.html#thread={thread_id}"
+  },
+  "selectors": {
+    "inbox_row": ".conv[data-id]",
+    "row_name": ".conv[data-id='{thread_id}'] .nm",
+    "row_snippet": ".conv[data-id='{thread_id}'] .snip",
+    "thread_subject": "#thread-head h2",
+    "message": "#thread .msg",
+    "message_body": "#thread .msg .bubble",
+    "reply_box": "#composer",
+    "send_button": "#send",
+    "stage_select": "#stage",
+    "resolve_button": "#resolve",
+    "customer_name": ".rail .cust .nm",
+    "company": ".rail .cust .co"
+  },
+  "flows": {
+    "read_inbox": [
+      "browse.navigate {inbox}",
+      "browse.snapshot --interactive  (or read .conv rows with browse.eval)",
+      "build [{thread_id, contact, company, snippet, unread}] from the rows"
+    ],
+    "read_thread": [
+      "browse.navigate {inbox}",
+      "browse.click .conv[data-id='{thread_id}']",
+      "browse.snapshot within '#thread'  \u2014 capture every message body + timestamp",
+      "compare with relay thread {thread_id}; if the customer wrote something new, relay log it before replying"
+    ],
+    "send_reply": [
+      "browse.fill #composer with the approved text",
+      "browse.click #send",
+      "browse.snapshot within '#thread'  \u2014 VERIFY the message is present before recording it",
+      "relay send {thread_id} --text '<exact text>' --by agent"
+    ],
+    "set_stage": [
+      "browse.select #stage '<stage>'",
+      "browse.snapshot within '.rail'  \u2014 verify the select now shows the stage",
+      "relay log {thread_id} --kind stage --text '<old> -> <new>'"
+    ],
+    "resolve": [
+      "browse.click #resolve",
+      "relay resolve {thread_id} --outcome '<one line>'"
+    ]
+  },
+  "guardrails": [
+    "Never send a message you have not read in full after filling the box.",
+    "One outbound reply per inbound message; relay send refuses a double-send unless --force.",
+    "Do not change stage to 'Closed won' from this connector; that is a human decision.",
+    "If the customer asks for a refund, legal term, or security artefact not in the knowledge base, escalate instead of improvising."
+  ]
+}
