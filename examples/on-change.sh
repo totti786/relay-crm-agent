@@ -5,10 +5,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# No exec: relay appends its hook-lock cleanup after this command.
 THREADS="${RELAY_CHANGED_THREADS:-}"
 [ -z "$THREADS" ] && exit 0
 
-exec opencode run --auto --archived \
+opencode run --auto --archived \
   --title "relay inbound: ${THREADS}" \
   --prompt "Inbound arrived on Relay threads: ${THREADS}.
 

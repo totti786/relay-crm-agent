@@ -163,6 +163,11 @@ You need only two things: a logged-in browser session and a selector map.
 4. Set `verified: false`, dry-run it, then set the date.
 5. If the CRM has an API/webhook, prefer it for **ingest** (contacts, messages) and use the
    browser only for **actions** (send, stage). The store does not care where data came from.
+6. If the workspace is explicitly browser-only (GoHighLevel), skip the API path. Poll the
+   Conversations inbox, open changed rows, capture stable message ids/timestamps, write a
+   snapshot in the shape of `examples/gohighlevel-browser-snapshot.json`, then run
+   `relay sync`. The runbook is `examples/gohighlevel-watch.md`. If the DOM has no stable
+   id, stop and report — a duplicate is worse than a missed poll.
 
 ## 8. The learning loop
 

@@ -1,0 +1,2018 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relay Console — interactive demo</title>
+<meta name="description" content="An interactive demo of Relay: durable support memory, an explainable queue, and a policy gate that is enforced in code.">
+<style>
+  :root{
+    --paper:#f3f0e9;
+    --paper-2:#ece8de;
+    --panel:#fbfaf6;
+    --panel-2:#f7f4ed;
+    --ink:#17160f;
+    --ink-2:#3c3a31;
+    --muted:#7b766a;
+    --muted-2:#9a9486;
+    --line:#e0dbcf;
+    --line-2:#ece8dd;
+    --green:#125c42;
+    --green-2:#0d4935;
+    --green-soft:#e4efe8;
+    --green-line:#c6dccf;
+    --amber:#8f5606;
+    --amber-soft:#f8edd8;
+    --amber-line:#ecdcbc;
+    --red:#9c2b22;
+    --red-soft:#f7e7e4;
+    --red-line:#eed4d0;
+    --blue:#384a8f;
+    --blue-soft:#eceef8;
+    --term:#17180f;
+    --term-2:#1e1f15;
+    --term-ink:#e8e3d3;
+    --term-muted:#918d7c;
+    --serif:ui-serif, Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
+    --sans:-apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+    --mono:ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --shadow:0 1px 2px rgba(35,32,24,.05), 0 12px 30px -24px rgba(35,32,24,.35);
+    --r:11px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--paper);color:var(--ink);
+    font-family:var(--sans);font-size:13.5px;line-height:1.55;
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+    overflow:hidden;
+  }
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.28;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.055'/%3E%3C/svg%3E");
+  }
+  ::selection{background:#d9e8de}
+  .stage::-webkit-scrollbar,.inspector::-webkit-scrollbar,.rail::-webkit-scrollbar{width:10px;height:10px}
+  .stage::-webkit-scrollbar-thumb,.inspector::-webkit-scrollbar-thumb,.rail::-webkit-scrollbar-thumb{background:#d4cec0;border:3px solid transparent;background-clip:content-box;border-radius:10px}
+  .stage::-webkit-scrollbar-track,.inspector::-webkit-scrollbar-track,.rail::-webkit-scrollbar-track{background:transparent}
+  button,input,select,textarea{font:inherit;color:inherit}
+  button{cursor:pointer}
+  button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{
+    outline:2px solid var(--green);outline-offset:2px;
+  }
+  h1,h2,h3,p{margin:0}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .serif{font-family:var(--serif)}
+  .muted{color:var(--muted)}
+  .skip{position:absolute;left:-9999px;top:0;background:var(--ink);color:#fff;padding:8px 12px;z-index:100}
+  .skip:focus{left:8px;top:8px}
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--muted-2);flex:0 0 auto}
+  .dot.ok{background:var(--green)}
+  .dot.warn{background:var(--amber)}
+  .dot.bad{background:var(--red)}
+  .app{position:relative;z-index:1;height:100vh;display:flex;flex-direction:column}
+
+  /* ---------------- topbar ---------------- */
+  .topbar{
+    height:56px;flex:0 0 56px;display:flex;align-items:center;gap:16px;
+    padding:0 18px;background:var(--panel);border-bottom:1px solid var(--line);
+    position:relative;z-index:6;
+  }
+  .brand{display:flex;align-items:center;gap:10px;padding-right:16px;border-right:1px solid var(--line-2)}
+  .brand .mark{
+    width:27px;height:27px;border-radius:8px;background:var(--ink);color:#f7f3e8;
+    display:grid;place-items:center;font-family:var(--serif);font-size:15px;font-weight:600;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+  }
+  .brand .name{font-family:var(--serif);font-size:17px;letter-spacing:.1px;line-height:1}
+  .brand .sub{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-top:3px}
+  .crumb{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px;white-space:nowrap}
+  .crumb b{color:var(--ink-2);font-weight:550}
+  .crumb .sep{color:var(--muted-2)}
+  .topbar .spacer{flex:1}
+  .gate-select{
+    display:flex;align-items:center;gap:7px;height:30px;padding:0 4px 0 10px;
+    border:1px solid var(--line);border-radius:7px;background:var(--panel-2);
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;color:var(--muted);
+  }
+  .gate-select select{
+    border:0;background:transparent;font-family:var(--mono);font-size:11px;color:var(--ink);
+    padding:4px 2px;cursor:pointer;
+  }
+  .status-chip{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;color:var(--muted);white-space:nowrap}
+  .clock{font-family:var(--mono);font-size:10.5px;color:var(--muted);white-space:nowrap;letter-spacing:.02em}
+  .help{
+    width:30px;height:30px;border-radius:50%;border:1px solid var(--line);background:var(--panel);
+    color:var(--ink-2);font-family:var(--serif);font-size:14px;display:grid;place-items:center;
+  }
+  .help:hover{background:var(--panel-2);border-color:#cfc9bb}
+  .avatar{
+    width:29px;height:29px;border-radius:50%;display:grid;place-items:center;flex:0 0 auto;
+    background:#ded7c5;color:#4c4738;font-size:10.5px;font-weight:700;letter-spacing:.03em;
+  }
+  .avatar.me{background:var(--green);color:#eaf3ee}
+  .avatar.xl{width:48px;height:48px;font-size:15px;border-radius:13px}
+  .avatar.lg{width:34px;height:34px;font-size:11.5px;border-radius:10px}
+
+  /* ---------------- shell ---------------- */
+  .shell{
+    flex:1;min-height:0;display:grid;
+    grid-template-columns:218px minmax(0,1fr) 338px;
+  }
+  @media(max-width:1240px){.shell{grid-template-columns:198px minmax(0,1fr) 304px}}
+  .rail{
+    display:flex;flex-direction:column;gap:10px;min-height:0;overflow-y:auto;
+    padding:16px 12px;background:var(--panel-2);border-right:1px solid var(--line);
+  }
+  .ws-label,.nav-label{
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;
+    color:var(--muted-2);padding:0 8px;margin-bottom:6px;
+  }
+  .rail-ws{border:1px solid var(--line);border-radius:9px;background:var(--panel);padding:10px;margin-bottom:2px}
+  .ws-row{display:flex;align-items:center;gap:7px;padding:4px 2px;font-size:11.5px;color:var(--ink-2)}
+  .ws-row .ws-meta{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--muted);letter-spacing:.03em}
+  .nav{display:flex;flex-direction:column;gap:2px}
+  .nav-btn{
+    display:flex;align-items:center;gap:9px;width:100%;padding:8px 9px;border:1px solid transparent;
+    border-radius:7px;background:transparent;color:var(--ink-2);font-size:12.5px;text-align:left;
+  }
+  .nav-btn:hover{background:#f1ede3;color:var(--ink)}
+  .nav-btn.on{background:var(--panel);border-color:var(--line);box-shadow:var(--shadow);color:var(--ink);font-weight:600}
+  .nav-btn svg{width:15px;height:15px;flex:0 0 auto;opacity:.72}
+  .nav-btn.on svg{opacity:1;color:var(--green)}
+  .nav-btn .count{
+    margin-left:auto;font-family:var(--mono);font-size:9.5px;font-weight:600;
+    min-width:17px;height:17px;padding:0 5px;border-radius:5px;display:grid;place-items:center;
+    background:var(--paper-2);color:var(--muted);border:1px solid var(--line-2);
+  }
+  .nav-btn .count.hot{background:var(--red-soft);color:var(--red);border-color:var(--red-line)}
+  .rail-sep{height:1px;background:var(--line);margin:2px 2px}
+  .rail-actions{display:flex;flex-direction:column;gap:2px}
+  .rail-btn{
+    display:flex;align-items:center;gap:9px;padding:8px 9px;border:1px solid transparent;
+    border-radius:7px;background:transparent;color:var(--muted);font-size:12px;text-align:left;
+  }
+  .rail-btn:hover{background:#f1ede3;color:var(--ink-2)}
+  .rail-btn svg{width:14px;height:14px;opacity:.7}
+  .rail-foot{margin-top:auto;padding:10px 8px 2px;color:var(--muted-2);font-family:var(--mono);font-size:9.5px;line-height:1.7;letter-spacing:.02em}
+  .rail-foot p{display:flex;align-items:center;gap:6px}
+  .rail-foot svg{width:12px;height:12px;flex:0 0 auto;opacity:.6}
+
+  /* ---------------- stage ---------------- */
+  .stage{
+    min-width:0;overflow-y:auto;padding:20px 32px 48px;
+    scrollbar-gutter:stable;
+  }
+  .view-head{display:flex;align-items:flex-end;gap:20px;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap}
+  .eyebrow{
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;
+    color:var(--muted);margin-bottom:7px;
+  }
+  .view-head h1{font-family:var(--serif);font-weight:500;font-size:27px;letter-spacing:-.35px;line-height:1.12}
+  .lede{color:var(--muted);font-size:12.5px;margin-top:6px;max-width:58ch}
+  .panel{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+    box-shadow:var(--shadow);
+  }
+  .panel-head{
+    display:flex;align-items:center;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line-2);
+  }
+  .panel-head h2{font-size:12.5px;font-weight:600;letter-spacing:.01em}
+  .panel-head .aside{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--muted);letter-spacing:.03em}
+  .panel-body{padding:15px}
+
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:7px;height:33px;padding:0 13px;
+    border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink-2);
+    font-size:12px;font-weight:550;transition:background .12s,border-color .12s,transform .06s;
+    white-space:nowrap;
+  }
+  .btn:hover{background:var(--panel-2);border-color:#cfc9bb}
+  .btn:active{transform:translateY(1px)}
+  .btn svg{width:14px;height:14px}
+  .btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+  .btn.ghost:hover{background:var(--paper-2);color:var(--ink);border-color:var(--line)}
+  .btn.primary{background:var(--green);border-color:var(--green);color:#f4faf6}
+  .btn.primary:hover{background:var(--green-2);border-color:var(--green-2)}
+  .btn.primary:disabled{background:#cdc7b9;border-color:#cdc7b9;color:#fbfaf6;cursor:not-allowed}
+  .btn.amber{background:var(--amber-soft);border-color:var(--amber-line);color:var(--amber)}
+  .btn.amber:hover{background:#f4e5c8}
+  .btn.small{height:27px;padding:0 9px;font-size:11px;border-radius:6px}
+  .btn.small svg{width:12px;height:12px}
+  .link{
+    border:0;background:none;padding:0;color:var(--green);font-size:11.5px;font-weight:600;
+    text-decoration:underline;text-underline-offset:2px;text-decoration-color:#a9c8b8;
+  }
+  .link:hover{text-decoration-color:var(--green)}
+
+  .seg{display:inline-flex;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:2px}
+  .seg button{
+    border:0;background:transparent;color:var(--muted);font-size:11px;font-weight:550;
+    padding:5px 9px;border-radius:6px;white-space:nowrap;
+  }
+  .seg button:hover{color:var(--ink-2)}
+  .seg button.on{background:var(--panel);color:var(--ink);box-shadow:0 1px 2px rgba(35,32,24,.08)}
+  .badge{
+    display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9px;
+    font-weight:600;letter-spacing:.07em;text-transform:uppercase;padding:3px 7px;
+    border-radius:5px;border:1px solid var(--line);color:var(--muted);background:var(--panel-2);
+    white-space:nowrap;
+  }
+  .badge.auto{color:var(--green);background:var(--green-soft);border-color:var(--green-line)}
+  .badge.approval{color:var(--amber);background:var(--amber-soft);border-color:var(--amber-line)}
+  .badge.draft{color:var(--red);background:var(--red-soft);border-color:var(--red-line)}
+  .badge.blue{color:var(--blue);background:var(--blue-soft);border-color:#d9dcee}
+  .tags{display:flex;flex-wrap:wrap;gap:5px}
+  .tag{
+    font-size:9px;font-weight:650;letter-spacing:.055em;text-transform:uppercase;
+    padding:2px 6px;border-radius:4px;border:1px solid var(--line);color:var(--muted);
+    background:var(--panel);white-space:nowrap;
+  }
+  .tag.hot{color:var(--red);border-color:var(--red-line);background:var(--red-soft)}
+  .tag.warm{color:var(--amber);border-color:var(--amber-line);background:var(--amber-soft)}
+  .tag.cool{color:var(--blue);border-color:#d9dcee;background:var(--blue-soft)}
+  .tag.green{color:var(--green);border-color:var(--green-line);background:var(--green-soft)}
+
+  /* ---------------- brief ---------------- */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+  @media(max-width:780px){.stats{grid-template-columns:repeat(2,1fr)}}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px 14px;box-shadow:var(--shadow)}
+  .stat .k{font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .stat .v{font-family:var(--serif);font-size:27px;line-height:1.15;margin-top:5px;letter-spacing:-.3px}
+  .stat .v small{font-family:var(--sans);font-size:10.5px;color:var(--muted);letter-spacing:0;margin-left:3px}
+  .stat .n{font-size:10.5px;color:var(--muted);margin-top:2px}
+  .cols{display:grid;grid-template-columns:1.35fr .85fr;gap:14px;margin-bottom:14px}
+  @media(max-width:980px){.cols{grid-template-columns:1fr}}
+  .row-link{
+    display:flex;align-items:flex-start;gap:10px;width:100%;padding:10px 14px;border:0;
+    border-bottom:1px solid var(--line-2);background:transparent;text-align:left;
+  }
+  .row-link:last-child{border-bottom:0}
+  .row-link:hover{background:var(--panel-2)}
+  .row-link .n{font-family:var(--mono);font-size:10px;color:var(--muted-2);padding-top:2px;width:16px;flex:0 0 auto}
+  .row-link .t{min-width:0;flex:1}
+  .row-link .t b{display:block;font-size:12.5px;font-weight:600}
+  .row-link .t span{display:block;color:var(--muted);font-size:11.5px;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row-link .meta{font-family:var(--mono);font-size:10px;color:var(--muted);white-space:nowrap;padding-top:2px}
+  .risk-card{padding:14px}
+  .risk-card .big{font-family:var(--serif);font-size:22px;margin:4px 0 2px}
+  .risk-card p{color:var(--muted);font-size:11.5px;margin-top:5px}
+
+  /* ---------------- queue ---------------- */
+  .queue{display:flex;flex-direction:column;gap:9px}
+  .qcard{
+    position:relative;display:flex;gap:14px;align-items:flex-start;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px 15px 12px;
+    box-shadow:var(--shadow);transition:border-color .12s,transform .12s,box-shadow .12s;
+  }
+  .qcard:hover{border-color:#d3ccbd;transform:translateY(-1px);box-shadow:0 2px 4px rgba(35,32,24,.06),0 18px 34px -26px rgba(35,32,24,.45)}
+  .qcard-hit{
+    position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:10px;
+    background:transparent;z-index:1;
+  }
+  .qcard-hit:focus-visible{outline:2px solid var(--green);outline-offset:-3px}
+  .qcard > *:not(.qcard-hit){position:relative;z-index:0;pointer-events:none}
+  .qcard .q-why{pointer-events:auto;position:relative;z-index:2}
+  .q-rank{font-family:var(--serif);font-size:19px;color:var(--muted-2);line-height:1;padding-top:2px;width:24px;flex:0 0 auto}
+  .q-main{min-width:0;flex:1}
+  .q-top{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .q-name{font-size:13px;font-weight:650;letter-spacing:-.05px}
+  .q-co{color:var(--muted);font-size:11.5px}
+  .q-wait{font-family:var(--mono);font-size:9.5px;color:var(--muted);margin-left:auto;white-space:nowrap}
+  .q-wait.bad{color:var(--red)}
+  .q-subject{font-family:var(--serif);font-size:16.5px;letter-spacing:-.1px;margin:3px 0 4px;line-height:1.3}
+  .q-reasons{color:var(--muted);font-size:11.5px;line-height:1.5}
+  .q-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
+  .q-side{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:0 0 auto;padding-left:6px}
+  .q-score{font-family:var(--mono);font-size:23px;font-weight:600;letter-spacing:-.5px;line-height:1;font-variant-numeric:tabular-nums}
+  .q-score small{font-size:8.5px;font-weight:500;letter-spacing:.08em;color:var(--muted);display:block;text-align:right;margin-top:3px}
+  .q-bar{height:3px;background:var(--paper-2);border-radius:2px;overflow:hidden;width:76px}
+  .q-bar span{display:block;height:100%;background:var(--green);border-radius:2px;transition:width .5s cubic-bezier(.2,.7,.3,1)}
+  .q-bar span.hot{background:var(--red)}
+  .q-why{
+    margin-top:2px;border:0;background:transparent;padding:2px 0;font-size:10px;color:var(--muted);
+    font-family:var(--mono);letter-spacing:.02em;display:inline-flex;align-items:center;gap:4px;
+  }
+  .q-why:hover{color:var(--ink)}
+  .q-why svg{width:11px;height:11px;transition:transform .15s}
+  .q-why[aria-expanded="true"] svg{transform:rotate(180deg)}
+  .q-breakdown{
+    flex-basis:100%;margin:2px 0 0 38px;padding:10px 12px;border-top:1px dashed var(--line);
+    display:grid;grid-template-columns:1fr auto;gap:4px 12px;font-size:11px;
+  }
+  .q-breakdown .lbl{color:var(--muted)}
+  .q-breakdown .pts{font-family:var(--mono);color:var(--ink-2);text-align:right}
+  .q-breakdown .total{border-top:1px solid var(--line-2);padding-top:5px;margin-top:3px;font-weight:650;color:var(--ink)}
+  .q-breakdown .why-note{grid-column:1/-1;color:var(--muted-2);font-size:10px;margin-top:3px}
+  .qcard.answered{opacity:.82}
+  .qcard.answered .q-bar span{background:var(--muted-2)}
+  .queue-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted-2);font-family:var(--mono);font-size:9.5px;margin-top:12px;letter-spacing:.03em}
+
+  /* ---------------- thread ---------------- */
+  .back{
+    display:inline-flex;align-items:center;gap:6px;border:0;background:none;padding:0;margin-bottom:10px;
+    color:var(--muted);font-size:11.5px;
+  }
+  .back:hover{color:var(--ink)}
+  .back svg{width:13px;height:13px}
+  .thread-top{display:flex;align-items:flex-start;gap:14px;margin-bottom:10px}
+  .person{display:flex;align-items:center;gap:12px;min-width:0}
+  .person h1{font-family:var(--serif);font-size:24px;font-weight:500;letter-spacing:-.3px;line-height:1.15}
+  .person p{color:var(--muted);font-size:11.5px;margin-top:2px}
+  .thread-score{margin-left:auto;text-align:right;flex:0 0 auto}
+  .thread-score b{font-family:var(--mono);font-size:26px;font-weight:600;letter-spacing:-.6px;line-height:1}
+  .thread-score span{display:block;font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-top:4px;white-space:nowrap}
+  .thread-subject{padding:10px 0 0;border-top:1px solid var(--line);margin-bottom:12px}
+  .thread-subject h2{font-family:var(--serif);font-size:19px;font-weight:500;letter-spacing:-.15px;margin-bottom:6px}
+  .facts{display:flex;flex-wrap:wrap;gap:6px 10px;color:var(--muted);font-size:11px;margin-top:8px;font-family:var(--mono);letter-spacing:.01em}
+  .facts .sep{color:var(--line)}
+  .facts .bad{color:var(--red)}
+  .memory-strip{
+    display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--panel-2);
+    border:1px solid var(--line);border-left:3px solid var(--green);border-radius:7px;
+    padding:8px 12px;margin-bottom:12px;font-size:11px;color:var(--muted);
+  }
+  .memory-strip b{color:var(--ink-2);font-weight:600;font-size:10px;font-family:var(--mono);letter-spacing:.06em;text-transform:uppercase}
+  .memory-strip .chip{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:2px 7px;font-family:var(--mono);font-size:9.5px;color:var(--ink-2)}
+  .memory-strip .chip.bad{color:var(--red);border-color:var(--red-line);background:var(--red-soft)}
+  .timeline{display:flex;flex-direction:column;gap:12px;margin-bottom:14px}
+  .msg{display:flex;gap:10px;align-items:flex-start;max-width:86%}
+  .msg.out{margin-left:auto;flex-direction:row-reverse}
+  .msg .bubble{
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 13px;
+    box-shadow:var(--shadow);min-width:0;
+  }
+  .msg.out .bubble{background:var(--green-soft);border-color:var(--green-line)}
+  .msg-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+  .msg-head b{font-size:11.5px;font-weight:650}
+  .msg-head span{font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:.02em}
+  .msg-body{font-size:12.5px;line-height:1.62;color:var(--ink-2);white-space:pre-line}
+  .msg.out .msg-body{color:#20463a}
+  .wait-marker{
+    align-self:center;display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:9.5px;
+    color:var(--red);background:var(--red-soft);border:1px solid var(--red-line);border-radius:20px;padding:4px 11px;
+    white-space:nowrap;
+  }
+  .wait-marker svg{width:12px;height:12px;flex:0 0 auto}
+  .wait-marker.ok{color:var(--green);background:var(--green-soft);border-color:var(--green-line)}
+
+  /* ---------------- composer + gate ---------------- */
+  .composer{padding:12px 14px 11px;scroll-margin:90px}
+  .composer-head{display:flex;align-items:flex-start;gap:10px;margin-bottom:9px}
+  .composer-head h3{font-family:var(--serif);font-size:16px;font-weight:500}
+  .composer-head .words{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--muted);padding-top:2px;white-space:nowrap}
+  .composer-head .words.over{color:var(--red)}
+  .composer textarea{
+    width:100%;min-height:84px;resize:vertical;border:1px solid var(--line);border-radius:8px;
+    background:var(--panel);padding:11px 12px;font-size:12.8px;line-height:1.6;color:var(--ink);
+    outline:none;transition:border-color .12s,box-shadow .12s;
+  }
+  .composer textarea:focus{border-color:#adc3b6;box-shadow:0 0 0 3px #edf3ef}
+  .composer textarea::placeholder{color:var(--muted-2)}
+  .examples{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:7px;font-size:10.5px;color:var(--muted-2)}
+  .chip-btn{
+    border:1px solid var(--line);background:var(--panel-2);border-radius:20px;padding:3px 9px;
+    font-size:10px;color:var(--muted);white-space:nowrap;
+  }
+  .chip-btn:hover{border-color:#cfc9bb;color:var(--ink-2);background:var(--panel)}
+  .promise-toggle{display:flex;align-items:center;gap:7px;margin-top:8px;font-size:11px;color:var(--muted);cursor:pointer;width:max-content}
+  .promise-toggle input{accent-color:var(--green);width:13px;height:13px}
+  .promise-fields{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
+  .promise-fields[hidden]{display:none}
+  .promise-fields input{
+    flex:1;min-width:180px;border:1px solid var(--line);border-radius:7px;background:var(--panel);
+    padding:7px 9px;font-size:11.5px;outline:none;
+  }
+  .promise-fields input:focus{border-color:#adc3b6;box-shadow:0 0 0 3px #edf3ef}
+  .promise-fields select,.field select{
+    border:1px solid var(--line);border-radius:7px;background:var(--panel);padding:6px 8px;font-size:11px;
+  }
+  .gate{
+    margin-top:9px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+    background:var(--paper-2);transition:background .2s,border-color .2s;
+  }
+  .gate-line{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .gate-line b{font-size:11.5px;font-weight:650}
+  .gate-dot{width:7px;height:7px;border-radius:50%;background:var(--muted-2);flex:0 0 auto}
+  .gate-tier{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:.02em}
+  .gate ul{margin:6px 0 0;padding:0 0 0 15px;color:var(--muted);font-size:11px;line-height:1.65}
+  .gate .reasons{margin-top:3px;color:var(--muted);font-size:10.5px;line-height:1.55}
+  .gate ul li::marker{color:var(--muted-2)}
+  .gate p.note{margin-top:4px;color:var(--muted);font-size:11px}
+  .gate.is-auto{background:var(--green-soft);border-color:var(--green-line)}
+  .gate.is-auto .gate-dot{background:var(--green)}
+  .gate.is-auto .gate-line b{color:var(--green)}
+  .gate.is-approval{background:var(--amber-soft);border-color:var(--amber-line)}
+  .gate.is-approval .gate-dot{background:var(--amber)}
+  .gate.is-approval .gate-line b{color:var(--amber)}
+  .gate.is-draft{background:var(--red-soft);border-color:var(--red-line)}
+  .gate.is-draft .gate-dot{background:var(--red)}
+  .gate.is-draft .gate-line b{color:var(--red)}
+  .gate.is-approved{background:var(--green-soft);border-color:var(--green-line)}
+  .gate.is-approved .gate-dot{background:var(--green)}
+  .gate.is-approved .gate-line b{color:var(--green)}
+  .composer-actions{display:flex;align-items:center;gap:8px;margin-top:9px;flex-wrap:wrap}
+  .composer-actions .spacer{flex:1}
+  .draft-card .draft-body{
+    border:1px solid var(--line);border-radius:8px;background:var(--panel-2);padding:11px 12px;
+    font-size:12.5px;line-height:1.6;color:var(--ink-2);white-space:pre-line;
+  }
+  .draft-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:9px;font-size:11px;color:var(--muted)}
+  .draft-promise{margin-top:6px;font-size:10.5px;color:var(--green)}
+  .sent-panel{display:flex;align-items:flex-start;gap:12px}
+  .sent-check{
+    width:34px;height:34px;border-radius:50%;background:var(--green);color:#f4faf6;
+    display:grid;place-items:center;flex:0 0 auto;font-size:16px;
+  }
+  .sent-panel h3{font-family:var(--serif);font-size:17px;font-weight:500;margin-bottom:2px}
+  .sent-panel p{color:var(--muted);font-size:11.5px;line-height:1.65}
+  .sent-panel .actions{display:flex;gap:7px;margin-top:10px}
+
+  /* ---------------- monitor ---------------- */
+  .monitor-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+  @media(max-width:1080px){.monitor-grid{grid-template-columns:1fr}}
+  .alert{
+    display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line-2);
+  }
+  .alert:last-child{border-bottom:0}
+  .alert .ic{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;background:var(--red-soft);color:var(--red);flex:0 0 auto}
+  .alert .ic.warn{background:var(--amber-soft);color:var(--amber)}
+  .alert .ic svg{width:12px;height:12px}
+  .alert .t{min-width:0;flex:1}
+  .alert .t b{display:block;font-size:11.5px;font-weight:600}
+  .alert .t span{display:block;color:var(--muted);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .alert .when{font-family:var(--mono);font-size:9px;color:var(--red);white-space:nowrap}
+  .alert .when.warn{color:var(--amber)}
+  .exit-strip{display:flex;align-items:center;gap:7px;padding:9px 14px;background:var(--term);color:var(--term-ink);font-family:var(--mono);font-size:10px}
+  .exit-strip .code{margin-left:auto;border-radius:4px;padding:1px 6px;font-weight:600}
+  .exit-strip .code.bad{background:#4a1e19;color:#f3c0b8}
+  .exit-strip .code.ok{background:#173b2c;color:#a8dcc2}
+  .webhook-form{padding:14px 15px}
+  .webhook-form label.field{display:block;font-size:10px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+  .webhook-form select{width:100%;padding:8px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel);font-size:11.5px}
+  .webhook-form .row{display:flex;gap:7px;margin-top:10px;flex-wrap:wrap}
+  .serve-line{display:flex;gap:7px;flex-wrap:wrap;margin-top:11px;font-family:var(--mono);font-size:9.5px;color:var(--muted)}
+  .serve-line .chip{border:1px solid var(--line);border-radius:4px;padding:2px 6px;background:var(--panel-2)}
+  details.payload{margin-top:11px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2)}
+  details.payload summary{padding:7px 10px;cursor:pointer;font-size:10.5px;color:var(--muted);list-style:none;display:flex;align-items:center;gap:6px}
+  details.payload summary::-webkit-details-marker{display:none}
+  details.payload summary svg{width:12px;height:12px;transition:transform .15s}
+  details.payload[open] summary svg{transform:rotate(90deg)}
+  .terminal{background:var(--term);border-color:#2a2b1f;color:var(--term-ink);overflow:hidden}
+  .terminal .panel-head{border-bottom-color:#2e2f22}
+  .terminal .panel-head h2{color:#dbd6c4;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase}
+  .terminal .panel-head .aside{color:var(--term-muted)}
+  .terminal pre{
+    margin:0;padding:13px 15px;font-family:var(--mono);font-size:10.5px;line-height:1.7;
+    max-height:260px;overflow:auto;color:#cfc9b4;white-space:pre;
+  }
+  .terminal .k{color:#e9b96b}
+  .terminal .s{color:#a8d8bd}
+  .terminal .b{color:#e59b92}
+  .terminal .n{color:#b7b5e6}
+  .copy-btn{border:1px solid #3a3b2b;background:#232418;color:#c9c4b0;border-radius:5px;font-family:var(--mono);font-size:9px;padding:3px 7px;margin-left:auto}
+  .copy-btn:hover{background:#2d2e1f;color:#eee8d5}
+
+  /* ---------------- learn ---------------- */
+  .learn-grid{display:grid;grid-template-columns:1fr 1.08fr;gap:14px;margin-bottom:14px}
+  @media(max-width:1040px){.learn-grid{grid-template-columns:1fr}}
+  .rating{display:flex;gap:4px;margin:5px 0 10px}
+  .star{
+    border:0;background:none;font-size:19px;line-height:1;color:#d6d0c2;padding:0 1px;
+  }
+  .star.on{color:var(--amber)}
+  .star:hover{color:var(--amber)}
+  .fb-tags{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:9px}
+  .fb-tag{border:1px solid var(--line);background:var(--panel);border-radius:20px;padding:3px 9px;font-size:10px;color:var(--muted)}
+  .fb-tag.on{background:var(--green-soft);border-color:var(--green-line);color:var(--green);font-weight:600}
+  .field textarea,.field input,.field select{
+    width:100%;border:1px solid var(--line);border-radius:7px;background:var(--panel);
+    padding:8px 9px;font-size:12px;outline:none;
+  }
+  .field textarea{min-height:72px;resize:vertical;line-height:1.55}
+  .field textarea:focus,.field input:focus{border-color:#adc3b6;box-shadow:0 0 0 3px #edf3ef}
+  .field label{display:block;font-size:9.5px;font-family:var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+  .field + .field{margin-top:9px}
+  .fb-item{padding:10px 14px;border-bottom:1px solid var(--line-2)}
+  .fb-item:last-child{border-bottom:0}
+  .fb-top{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .fb-stars{color:var(--amber);font-size:11px;letter-spacing:.06em}
+  .fb-item p{font-size:11.5px;color:var(--ink-2);margin-top:4px}
+  .fb-item .fb-actions{margin-top:5px}
+  .lesson{padding:11px 14px;border-bottom:1px solid var(--line-2)}
+  .lesson:last-child{border-bottom:0}
+  .lesson-top{display:flex;align-items:center;gap:6px;margin-bottom:5px}
+  .lesson p{font-size:11.5px;color:var(--ink-2);line-height:1.55}
+  .lesson-foot{display:flex;align-items:center;gap:8px;margin-top:6px}
+  .lesson-foot .ev{font-family:var(--mono);font-size:9px;color:var(--muted-2);margin-right:auto}
+  .lesson.retired{opacity:.55}
+  .soul-panel{margin-bottom:14px}
+  .soul{
+    background:var(--paper-2);border-radius:0 0 var(--r) var(--r);padding:13px 16px;
+    font-size:11.5px;line-height:1.75;color:var(--ink-2);
+  }
+  .soul .line{display:flex;gap:9px}
+  .soul .line b{flex:0 0 74px;font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-top:2px}
+  .soul .learned{
+    margin:10px 0 0;padding:8px 10px;background:var(--green-soft);border-left:3px solid var(--green);
+    border-radius:0 6px 6px 0;font-size:11px;color:#20463a;
+  }
+  .soul .learned b{display:block;font-size:9px;font-family:var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--green);margin-bottom:2px}
+
+  /* ---------------- inspector ---------------- */
+  .inspector{
+    min-height:0;overflow-y:auto;background:var(--panel-2);border-left:1px solid var(--line);
+    padding:15px 14px 40px;
+  }
+  .insp-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .insp-head .t{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted)}
+  .tabs{margin-left:auto;display:flex;gap:1px;background:var(--paper-2);border:1px solid var(--line);border-radius:6px;padding:2px}
+  .tabs button{border:0;background:transparent;border-radius:4px;padding:3px 8px;font-size:10px;color:var(--muted)}
+  .tabs button.on{background:var(--panel);color:var(--ink);box-shadow:0 1px 2px rgba(35,32,24,.08)}
+  .insp-gate .gate{margin-top:0}
+  .insp-section{margin-top:14px}
+  .insp-label{
+    display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:9px;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--muted);margin-bottom:7px;
+  }
+  .insp-label .count{margin-left:auto;letter-spacing:0;color:var(--muted-2)}
+  .trace{display:flex;flex-direction:column;gap:1px}
+  .trace-item{display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--line-2)}
+  .trace-item:last-child{border-bottom:0}
+  .t-dot{width:6px;height:6px;border-radius:2px;margin-top:5px;flex:0 0 auto;background:var(--muted-2)}
+  .t-dot.send,.t-dot.approve{background:var(--green)}
+  .t-dot.policy,.t-dot.queue{background:var(--amber)}
+  .t-dot.webhook,.t-dot.sync{background:var(--blue)}
+  .t-dot.lesson{background:#7b5aa6}
+  .t-dot.refuse{background:var(--red)}
+  .trace-item .tx{min-width:0;font-size:10.5px;line-height:1.5;color:var(--ink-2);word-break:break-word}
+  .trace-item .tm{font-family:var(--mono);font-size:8.5px;color:var(--muted-2);margin-top:1px}
+  .mem-block{padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);margin-bottom:8px}
+  .mem-block .k{font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+  .mem-block .v{font-size:12px;font-weight:600}
+  .mem-block .s{font-size:10.5px;color:var(--muted);margin-top:2px;line-height:1.55}
+  .mem-list{list-style:none;margin:0;padding:0}
+  .mem-list li{display:flex;gap:7px;padding:5px 0;border-bottom:1px solid var(--line-2);font-size:10.5px;color:var(--ink-2)}
+  .mem-list li:last-child{border-bottom:0}
+  .mem-list .due{margin-left:auto;font-family:var(--mono);font-size:8.5px;color:var(--muted);white-space:nowrap}
+  .mem-list .due.bad{color:var(--red)}
+  .empty{color:var(--muted-2);font-size:10.5px;padding:6px 0}
+
+  /* ---------------- tour + toast ---------------- */
+  .tourbar{
+    position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:40;
+    width:min(720px,calc(100vw - 32px));background:var(--term);color:var(--term-ink);
+    border-radius:11px;box-shadow:0 20px 60px -20px rgba(20,20,12,.6);
+    padding:13px 15px;display:flex;gap:14px;align-items:flex-start;
+  }
+  .tourbar[hidden]{display:none}
+  .tourbar .step{
+    font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+    color:#d9a95f;border:1px solid #3c3a26;border-radius:4px;padding:2px 6px;white-space:nowrap;margin-top:2px;
+  }
+  .tourbar h4{font-family:var(--serif);font-size:15px;font-weight:500;color:#f2ecdb;margin-bottom:2px}
+  .tourbar p{font-size:11.5px;line-height:1.6;color:#bdb8a5;max-width:58ch}
+  .tourbar .tbody{min-width:0;flex:1}
+  .tourbar .tacts{display:flex;align-items:center;gap:5px;margin-top:8px}
+  .tourbar .tbtn{
+    border:1px solid #3e3d2b;background:#232418;color:#d8d2bf;border-radius:6px;
+    font-size:10.5px;padding:4px 9px;
+  }
+  .tourbar .tbtn:hover{background:#2e2f1f;color:#f3edda}
+  .tourbar .tbtn:disabled{opacity:.35;cursor:not-allowed}
+  .tourbar .tbtn.next{background:#e7dfc9;border-color:#e7dfc9;color:#1b1c12;font-weight:600}
+  .tourbar .tbtn.next:hover{background:#f3ecd9}
+  .tourbar .close{
+    border:0;background:transparent;color:#8f8b79;font-size:17px;line-height:1;padding:0 2px;
+  }
+  .tourbar .close:hover{color:#ece6d4}
+  .tour-focus{outline:2px solid #c2872c;outline-offset:4px;border-radius:12px;animation:tourPulse 2s ease-in-out infinite}
+  @keyframes tourPulse{0%,100%{outline-color:#c2872c}50%{outline-color:#e0b467}}
+  .toast{
+    position:fixed;left:50%;bottom:22px;transform:translate(-50%,14px);z-index:30;
+    background:var(--ink);color:#f3eee1;border-radius:8px;padding:9px 13px;font-size:11.5px;
+    box-shadow:0 14px 40px -16px rgba(20,20,12,.6);opacity:0;pointer-events:none;
+    transition:opacity .18s,transform .18s;max-width:min(520px,calc(100vw - 32px));
+    display:flex;align-items:center;gap:8px;
+  }
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+  .toast .dot{background:#8fd6b2}
+  .toast.bad .dot{background:#f09a90}
+  .toast.amber .dot{background:#e8bd76}
+
+  /* ---------------- responsive ---------------- */
+  @media(max-width:1099px){
+    .shell{grid-template-columns:minmax(0,1fr)}
+    .rail{
+      flex-direction:row;align-items:center;justify-content:center;gap:8px;
+      overflow-x:auto;overflow-y:hidden;padding:8px 12px;
+      border-right:0;border-bottom:1px solid var(--line);
+    }
+    .rail-ws,.nav-label,.rail-sep,.rail-foot{display:none}
+    .topbar{position:sticky;top:0}
+    .rail{position:sticky;top:56px;z-index:5}
+    .nav{flex-direction:row;gap:2px;width:auto;flex:0 0 auto}
+    .nav-btn{flex:0 0 auto;width:auto;justify-content:center;padding:7px 10px;font-size:11.5px;gap:5px;white-space:nowrap}
+    .nav-btn svg{width:13px;height:13px}
+    .nav-btn .count{margin-left:0;min-width:15px;height:15px;font-size:8.5px}
+    .rail-actions{display:none}
+    .stage{overflow:visible;padding:20px 18px 40px}
+    .inspector{border-left:0;border-top:1px solid var(--line);overflow:visible;padding:16px 18px 40px}
+    .app{height:auto;min-height:100vh}
+    html,body{overflow:auto}
+  }
+  @media(max-width:720px){
+    .topbar{gap:9px;padding:0 12px}
+    .crumb,.status-chip,.clock{display:none}
+    .brand{padding-right:0;border-right:0}
+    .brand .sub{display:none}
+    .topbar .spacer{flex:1}
+    .view-head h1{font-size:23px}
+    .person h1{font-size:20px}
+    .thread-score b{font-size:21px}
+    .msg{max-width:96%}
+    .qcard{display:grid;grid-template-columns:25px minmax(0,1fr) auto;gap:6px 10px;align-items:start}
+    .q-rank{grid-column:1;grid-row:1}
+    .q-main{grid-column:2;grid-row:1}
+    .q-side{grid-column:3;grid-row:1;width:auto;flex-direction:column;align-items:flex-end;padding-left:0;gap:6px}
+    .q-top .q-wait{margin-left:0;width:100%}
+    .q-bar{display:none}
+    .q-why .why-label{display:none}
+    .q-breakdown{margin-left:0}
+    .tourbar{bottom:10px;padding:11px 12px}
+    .tourbar .step{display:none}
+    .stats{grid-template-columns:1fr 1fr}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#stage">Skip to workspace</a>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark" aria-hidden="true">R</div>
+      <div>
+        <div class="name">Relay</div>
+        <div class="sub">console · demo</div>
+      </div>
+    </div>
+    <div class="crumb">
+      <b>HubSpot</b><span class="sep">/</span><span>demo workspace</span><span class="sep">/</span><span>support</span>
+    </div>
+    <div class="spacer"></div>
+    <label class="gate-select" title="Simulate the autonomy tier">
+      <span>gate</span>
+      <select id="autonomy-select" aria-label="Simulated autonomy tier">
+        <option value="auto">auto</option>
+        <option value="approve">approve</option>
+        <option value="suggest">suggest</option>
+      </select>
+    </label>
+    <div class="status-chip"><span class="dot ok"></span> Browse connected</div>
+    <div class="clock" id="clock"></div>
+    <button class="help" data-act="tour-start" aria-label="Start the guided tour" title="Guided tour">?</button>
+    <div class="avatar me" title="You — support lead">AR</div>
+  </header>
+
+  <div class="shell">
+    <nav class="rail" id="rail" aria-label="Workspace navigation"></nav>
+    <main class="stage" id="stage" tabindex="-1"></main>
+    <aside class="inspector" id="inspector" aria-label="Inspector"></aside>
+  </div>
+
+  <div class="tourbar" id="tourbar" role="dialog" aria-label="Guided tour" hidden></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</div>
+
+<script>
+/* ------------------------------------------------------------------ helpers */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const H = 36e5, D = 24 * H, MIN = 6e4;
+const money = (n) => "$" + Number(n || 0).toLocaleString("en-US");
+const uid = (() => { let i = 0; return (p) => p + "-" + (++i); })();
+const initials = (name) => name.split(/\s+/).filter(Boolean).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+const hhmm = (ts = Date.now()) => new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
+const dayLabel = (ts = Date.now()) => new Date(ts).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" });
+
+function rel(ts) {
+  if (!ts) return "—";
+  const diff = ts - Date.now(), a = Math.abs(diff);
+  let v;
+  if (a < MIN) v = "now";
+  else if (a < H) v = Math.round(a / MIN) + "m";
+  else if (a < D) v = Math.round(a / H) + "h";
+  else v = Math.round(a / D) + "d";
+  if (v === "now") return "just now";
+  return diff < 0 ? v + " ago" : "in " + v;
+}
+const waitFor = (ts) => ts ? rel(ts).replace(" ago", "") : "—";
+function slaLabel(ts) {
+  if (!ts) return null;
+  const diff = ts - Date.now(), a = Math.abs(diff);
+  const v = a < H ? Math.round(a / MIN) + "m" : a < D ? Math.round(a / H) + "h" : Math.round(a / D) + "d";
+  return diff < 0 ? "SLA breached " + v : "SLA " + v + " left";
+}
+const tagClass = (tag) => {
+  const k = String(tag).toLowerCase();
+  if (/billing|security|churn|legal|vip|blocking/.test(k)) return "hot";
+  if (/priority|expansion|reporting|usage/.test(k)) return "warm";
+  if (/how-to|sso/.test(k)) return "cool";
+  return "";
+};
+const stars = (n) => "★".repeat(n) + "☆".repeat(5 - n);
+
+const ICONS = {
+  brief: '<path d="M4 13h4l2 5 4-12 2 7h4"/>',
+  queue: '<path d="M4 6h16M4 12h16M4 18h10"/>',
+  monitor: '<path d="M3 12h4l2-6 4 12 2-6h6"/>',
+  learn: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M18 16l.8 2.2L21 19l-2.2.8L18 22l-.8-2.2L15 19l2.2-.8z"/>',
+  chat: '<path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"/>',
+  play: '<path d="M8 5l11 7-11 7z"/>',
+  reset: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
+  db: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>',
+  chevron: '<path d="M6 9l6 6 6-6"/>',
+  arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  back: '<path d="M19 12H5M11 18l-6-6 6-6"/>',
+  check: '<path d="M20 6L9 17l-5-5"/>',
+  alert: '<path d="M12 3l9 17H3z"/><path d="M12 9v5M12 17v.5"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  shield: '<path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/>',
+  send: '<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/>',
+  close: '<path d="M6 6l12 12M18 6L6 18"/>',
+};
+const icon = (name, cls = "") => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+
+/* ------------------------------------------------------------------ seed */
+function seedState() {
+  const t0 = Date.now();
+  const trace = [
+    { at: t0 - 20e3, kind: "db", text: "pragma integrity_check → ok · 4 accounts · 4 threads · 13 messages" },
+    { at: t0 - 12e3, kind: "sync", text: "inbox snapshot · 4 threads · no changes" },
+    { at: t0 - 4e3, kind: "queue", text: "queue ranked 4 open · top t-dana (107 pts)" },
+  ];
+  return {
+    view: "queue",
+    selected: "t-priya",
+    sort: "relay",
+    autonomy: "auto",
+    tab: "trace",
+    expanded: new Set(),
+    sent: {},
+    sentInfo: {},
+    drafts: [],
+    draftId: 0,
+    sendsToday: 2,
+    accounts: {
+      loomly: { id: "loomly", name: "Loomly", domain: "loomly.io", plan: "Scale · 24 seats", mrr: 1850, stage: "Negotiation", owner: "Alex Rivera", health: "ok" },
+      northgate: { id: "northgate", name: "Northgate Labs", domain: "northgate.dev", plan: "Growth · 40 seats", mrr: 2400, stage: "Evaluation", owner: "Alex Rivera", health: "ok" },
+      fieldnote: { id: "fieldnote", name: "Fieldnote Studio", domain: "fieldnote.studio", plan: "Starter · 5 seats", mrr: 290, stage: "At risk", owner: "Unassigned", health: "at_risk" },
+      brightside: { id: "brightside", name: "Brightside", domain: "brightside.co", plan: "Team · 12 seats", mrr: 640, stage: "Active", owner: "Alex Rivera", health: "ok" },
+    },
+    contacts: {
+      priya: { id: "priya", name: "Priya Raman", account: "loomly", email: "priya@loomly.io", role: "Finance lead", tz: "CET", sentiment: "Warm" },
+      marcus: { id: "marcus", name: "Marcus Feld", account: "northgate", email: "m.feld@northgate.dev", role: "Head of Security", tz: "CT", sentiment: "Neutral" },
+      dana: { id: "dana", name: "Dana Okafor", account: "fieldnote", email: "dana@fieldnote.studio", role: "Founder", tz: "WAT", sentiment: "Frustrated" },
+      omar: { id: "omar", name: "Omar Haddad", account: "brightside", email: "ops@brightside.co", role: "Operations lead", tz: "GMT", sentiment: "Neutral" },
+    },
+    threads: {
+      "t-priya": {
+        id: "t-priya", account: "loomly", contact: "priya", subject: "Renewal invoice — VAT ID missing", channel: "email",
+        status: "open", waitingSince: t0 - 6 * H, slaDue: t0 + 2 * H, assignee: "Alex Rivera",
+        summary: "Renewal invoice needs VAT DE327441920 so AP can raise the PO before Friday.",
+        tags: ["Billing", "Expansion", "Priority"], updatedAt: t0 - 5 * H,
+      },
+      "t-marcus": {
+        id: "t-marcus", account: "northgate", contact: "marcus", subject: "SAML metadata for Okta", channel: "email",
+        status: "open", waitingSince: t0 - 26 * H, slaDue: t0 - 24 * H, assignee: "Alex Rivera",
+        summary: "Security review passed. Blocked on SAML metadata/ACS URL for an Okta test login; annual order Thursday.",
+        tags: ["Security", "SSO", "Blocking"], updatedAt: t0 - 25.9 * H,
+      },
+      "t-dana": {
+        id: "t-dana", account: "fieldnote", contact: "dana", subject: "Thinking about cancelling", channel: "email",
+        status: "open", waitingSince: t0 - 50 * H, slaDue: t0 - 47 * H, assignee: "Unassigned",
+        summary: "Low usage since January; wants to cancel before next cycle.",
+        tags: ["Churn risk", "Usage drop"], updatedAt: t0 - 49.9 * H,
+      },
+      "t-omar": {
+        id: "t-omar", account: "brightside", contact: "omar", subject: "Scheduled CSV export for monthly reporting", channel: "email",
+        status: "open", waitingSince: t0 - 3 * H, slaDue: t0 + 3 * H, assignee: "Alex Rivera",
+        summary: "Wants a scheduled CSV export of usage data for the monthly board pack.",
+        tags: ["How-to", "Reporting"], updatedAt: t0 - 3 * H,
+      },
+    },
+    messages: {
+      "t-priya": [
+        { id: "seed-priya-1", dir: "in", author: "Priya Raman", at: t0 - 6 * H, body: "Hi there — we got the renewal invoice for the Scale plan today, but our VAT number isn't on it. Our finance team can't process it without that, and the PO closes Friday.\n\nCould you reissue it with DE327441920 on it? Happy to jump on a quick call if that's easier." },
+        { id: "seed-priya-2", dir: "out", author: "Alex (Relay)", at: t0 - 5.5 * H, body: "Hi Priya — thanks for flagging, and sorry for the friction. I've asked our billing team to reissue with your VAT ID and to CC your AP inbox. You should have it well before Friday." },
+        { id: "seed-priya-3", dir: "in", author: "Priya Raman", at: t0 - 5 * H, body: "Thanks Alex. One more thing — we're adding 6 seats in January. Is the volume tier applied automatically, or do we need a new order form?" },
+      ],
+      "t-marcus": [
+        { id: "seed-marcus-1", dir: "in", author: "Marcus Feld", at: t0 - 26 * H, body: "Our security review passed, which is good news. The last blocker is SSO: I need the SAML metadata XML and the ACS URL for Okta. Our IT team wants to do a test login this week.\n\nIf that works we can sign the annual order on Thursday." },
+        { id: "seed-marcus-2", dir: "in", author: "Marcus Feld", at: t0 - 25.9 * H, body: "Also — does the Growth plan include SCIM provisioning, or is that an add-on?" },
+      ],
+      "t-dana": [
+        { id: "seed-dana-1", dir: "in", author: "Dana Okafor", at: t0 - 50 * H, body: "Hi — I want to be straight with you. We've been on Starter since January and the team has basically stopped opening it. The reports don't match how we work and I can't justify the renewal.\n\nUnless there's something I'm missing, we'll cancel before the next cycle." },
+        { id: "seed-dana-2", dir: "in", author: "Dana Okafor", at: t0 - 49.9 * H, body: "For context we're a 5-person studio, mostly client projects." },
+      ],
+      "t-omar": [
+        { id: "seed-omar-1", dir: "in", author: "Omar Haddad", at: t0 - 3 * H, body: "Hi — is there a way to schedule a CSV export of usage data each month? Right now I export it by hand for our board pack." },
+      ],
+    },
+    promises: [
+      { id: 1, thread: "t-priya", text: "Reissue renewal invoice with VAT DE327441920 and CC AP", due: t0 + 3 * H, status: "open" },
+      { id: 2, thread: "t-priya", text: "Reissued invoice with VAT DE327441920; confirm volume tier for 6 Jan seats", due: t0 + 7 * H, status: "open" },
+      { id: 3, thread: "t-marcus", text: "Send SAML metadata XML + ACS URL for Okta", due: t0 - 16 * H, status: "open" },
+    ],
+    tasks: [
+      { id: 1, thread: "t-priya", kind: "followup", title: "Confirm AP received the reissued invoice", due: t0 + 2 * D, status: "open" },
+      { id: 2, thread: "t-dana", kind: "review", title: "Workflow review before renewal — decide save vs cancel", due: t0 - 20 * H, status: "open" },
+    ],
+    feedback: [],
+    lessons: [
+      { id: 1, scope: "flow", text: "When a reply covers two asks, open with one sentence that acknowledges both.", evidence: "t-priya", status: "proposed", at: t0 - 30 * MIN },
+    ],
+    lessonSeq: 1,
+    lessonText: "",
+    lessonEvidence: "",
+    lessonScope: "flow",
+    fbNote: "",
+    fbTags: new Set(),
+    rating: 0,
+    composer: { text: "", promise: false, promiseText: "", promiseDue: "1d" },
+    webhookScenario: "reply",
+    lastPayload: null,
+    lastReport: null,
+    trace,
+    msgKeys: new Set(),
+    tour: { active: false, step: 0 },
+    toast: null,
+    toastTimer: null,
+  };
+}
+
+let state = seedState();
+for (const tid in state.messages) for (const m of state.messages[tid]) state.msgKeys.add(m.id);
+
+/* ------------------------------------------------------------------ domain */
+const RISKY_TAGS = ["billing", "security", "churn risk", "legal", "contract", "vip"];
+const PHRASES = ["refund", "chargeback", "credit note", "discount", "price increase", "pricing exception", "contract", "legal", "lawsuit", "indemn", "dpa", "gdpr", "soc 2", "security questionnaire", "penetration test", "roadmap", "sla credit", "cancel", "terminate", "delete your", "breach"];
+const WORD_LIMIT = 180;
+const DAILY_CAP = 30;
+
+const accountOf = (t) => state.accounts[t.account];
+const contactOf = (t) => state.contacts[t.contact];
+const msgsOf = (t) => state.messages[t.id] || [];
+const lastMsg = (t) => { const m = msgsOf(t); return m[m.length - 1] || null; };
+const openThreads = () => Object.values(state.threads).filter((t) => t.status === "open");
+const draftFor = (tid) => state.drafts.find((d) => d.thread === tid && (d.status === "pending" || d.status === "approved"));
+
+function policyFor(t, body) {
+  const reasons = [];
+  const text = (body || "").trim();
+  const words = text ? text.split(/\s+/).length : 0;
+  if (words > WORD_LIMIT) reasons.push({ k: "limit", text: words + " words exceeds the " + WORD_LIMIT + "-word limit" });
+  const tags = (t.tags || []).map((x) => x.toLowerCase());
+  const hit = tags.filter((x) => RISKY_TAGS.includes(x));
+  if (hit.length) reasons.push({ k: "tag", text: "sensitive thread: " + hit.join(", ") });
+  const low = text.toLowerCase().replace(/\s+/g, " ");
+  const phrases = PHRASES.filter((p) => low.includes(p));
+  if (phrases.length) reasons.push({ k: "phrase", text: "commitment language: " + phrases.slice(0, 3).join(", ") });
+  const mrr = accountOf(t).mrr || 0;
+  if (mrr >= 5000) reasons.push({ k: "vip", text: "VIP account (" + money(mrr) + " MRR)" });
+  if (state.sendsToday >= DAILY_CAP) reasons.push({ k: "cap", text: "daily cap reached (" + state.sendsToday + "/" + DAILY_CAP + ")" });
+
+  let decision = "auto_send";
+  if (state.autonomy === "suggest") decision = "draft_only";
+  else if (state.autonomy === "approve") decision = "requires_approval";
+  else if (reasons.length) decision = "requires_approval";
+
+  const labels = {
+    auto_send: "Auto-send",
+    requires_approval: "Needs approval",
+    draft_only: "Draft only",
+    approved: "Approved · human",
+    idle: "No draft yet",
+  };
+  return { decision, reasons, words, tier: state.autonomy, label: labels[decision] || decision };
+}
+
+function scoreParts(t) {
+  const a = accountOf(t), c = contactOf(t), p = [];
+  const mrr = a.mrr || 0;
+  if (mrr) p.push({ label: money(mrr) + " MRR", pts: Math.min(30, mrr / 100) });
+  if (t.waitingSince) {
+    const hrs = Math.max(0, (Date.now() - t.waitingSince) / H);
+    p.push({ label: "waiting " + waitFor(t.waitingSince), pts: Math.min(40, hrs * 2) });
+  }
+  const tags = (t.tags || []).map((x) => x.toLowerCase());
+  if (tags.some((x) => x === "churn risk" || x === "churn")) p.push({ label: "churn risk", pts: 14 });
+  if (tags.some((x) => x === "blocking" || x === "security")) p.push({ label: "blocking", pts: 12 });
+  if (["frustrated", "angry"].includes((c.sentiment || "").toLowerCase())) p.push({ label: "sentiment " + c.sentiment, pts: 15 });
+  if (["Negotiation", "Closed won"].includes(a.stage)) p.push({ label: "stage " + a.stage, pts: 5 });
+  if (t.slaDue) {
+    const hrs = (t.slaDue - Date.now()) / H;
+    if (hrs < 0) p.push({ label: "SLA breached", pts: 25 });
+    else if (hrs <= 4) p.push({ label: "SLA due soon", pts: 12 });
+  }
+  if (a.health === "at_risk") p.push({ label: "account at risk", pts: 10 });
+  return p;
+}
+const scoreOf = (t) => scoreParts(t).reduce((n, p) => n + p.pts, 0);
+
+function sortedThreads() {
+  const list = [...openThreads()];
+  if (state.sort === "mrr") list.sort((a, b) => accountOf(b).mrr - accountOf(a).mrr);
+  else if (state.sort === "newest") list.sort((a, b) => (lastMsg(b)?.at || 0) - (lastMsg(a)?.at || 0));
+  else list.sort((a, b) => scoreOf(b) - scoreOf(a));
+  return list;
+}
+
+function alertsData() {
+  const open = openThreads();
+  const waiting = open.filter((t) => t.waitingSince);
+  const breached = waiting.filter((t) => t.slaDue && t.slaDue < Date.now());
+  const unassigned = waiting.filter((t) => !t.assignee || t.assignee === "Unassigned");
+  const promises = state.promises.filter((p) => p.status === "open").sort((a, b) => a.due - b.due);
+  const overduePromises = promises.filter((p) => p.due < Date.now());
+  const tasks = state.tasks.filter((x) => x.status === "open").sort((a, b) => a.due - b.due);
+  return { open, waiting, breached, unassigned, promises, overduePromises, tasks };
+}
+
+function trace(kind, text) {
+  state.trace.unshift({ at: Date.now(), kind, text });
+  if (state.trace.length > 90) state.trace.pop();
+}
+
+function toast(msg, kind = "") {
+  state.toast = { msg, kind };
+  const el = $("#toast");
+  el.className = "toast show " + kind;
+  el.innerHTML = '<span class="dot"></span><span>' + esc(msg) + '</span>';
+  clearTimeout(state.toastTimer);
+  state.toastTimer = setTimeout(() => { el.className = "toast " + kind; }, 3400);
+}
+
+function resetComposer() {
+  state.composer = { text: "", promise: false, promiseText: "", promiseDue: "1d" };
+}
+
+/* ------------------------------------------------------------------ render: rail */
+function navBtn(view, label, ico, count, hot) {
+  const on = state.view === view ? " on" : "";
+  const c = count ? `<span class="count${hot ? " hot" : ""}">${count}</span>` : "";
+  return `<button class="nav-btn${on}" data-act="nav" data-view="${view}">${icon(ico)}<span>${label}</span>${c}</button>`;
+}
+function renderRail() {
+  const a = alertsData();
+  const alertN = a.breached.length + a.overduePromises.length;
+  const proposed = state.lessons.filter((l) => l.status === "proposed").length;
+  $("#rail").innerHTML = `
+    <div class="rail-ws">
+      <div class="ws-label">Local state</div>
+      <div class="ws-row"><span class="dot ok"></span> relay.db <span class="ws-meta">60 KB</span></div>
+      <div class="ws-row"><span class="dot ok"></span> Browse MCP <span class="ws-meta">connected</span></div>
+      <div class="ws-row"><span class="dot ok"></span> policy <span class="ws-meta" id="rail-gate">${esc(state.autonomy)}</span></div>
+    </div>
+    <div class="nav-label">Desk</div>
+    <div class="nav">
+      ${navBtn("brief", "Brief", "brief", 0)}
+      ${navBtn("queue", "Queue", "queue", a.open.length)}
+      ${navBtn("monitor", "Monitor", "monitor", alertN, alertN > 0)}
+      ${navBtn("learn", "Learn", "learn", proposed)}
+    </div>
+    <div class="rail-sep"></div>
+    <div class="rail-actions">
+      <button class="rail-btn" data-act="tour-start">${icon("play")}<span>Guided tour</span></button>
+      <button class="rail-btn" data-act="reset">${icon("reset")}<span>Reset demo</span></button>
+    </div>
+    <div class="rail-foot">
+      <p>${icon("db")} one writer · stdlib only</p>
+      <p>${icon("shield")} policy enforced in code</p>
+      <p>demo data · resets on reload</p>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ render: stage */
+function renderStage() {
+  const el = $("#stage");
+  if (state.view === "brief") el.innerHTML = viewBrief();
+  else if (state.view === "monitor") el.innerHTML = viewMonitor();
+  else if (state.view === "learn") el.innerHTML = viewLearn();
+  else if (state.view === "thread") el.innerHTML = viewThread();
+  else el.innerHTML = viewQueue();
+  if (state.view === "thread") updateGate();
+}
+
+function viewBrief() {
+  const a = alertsData();
+  const atRisk = Object.values(state.accounts).filter((x) => x.health === "at_risk");
+  const atRiskMrr = atRisk.reduce((n, x) => n + x.mrr, 0);
+  const top = sortedThreads().slice(0, 3);
+  const promises = a.promises.filter((p) => p.due <= Date.now() + D);
+  return `
+  <div class="view-head">
+    <div>
+      <div class="eyebrow">${esc(dayLabel())} · UTC</div>
+      <h1>Relay brief</h1>
+      <p class="lede">What matters today, read from SQLite — not from the CRM UI.</p>
+    </div>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="k">Open threads</div><div class="v">${a.open.length}</div><div class="n">${a.waiting.length} awaiting reply</div></div>
+    <div class="stat"><div class="k">At-risk revenue</div><div class="v">${money(atRiskMrr)}<small>/mo</small></div><div class="n">${atRisk.length} account${atRisk.length === 1 ? "" : "s"} flagged</div></div>
+    <div class="stat"><div class="k">SLA breached</div><div class="v" style="color:${a.breached.length ? "var(--red)" : "inherit"}">${a.breached.length}</div><div class="n">${a.unassigned.length} unowned</div></div>
+    <div class="stat"><div class="k">Promises due · 24h</div><div class="v">${promises.length}</div><div class="n">${a.overduePromises.length} already overdue</div></div>
+  </div>
+  <div class="cols">
+    <section class="panel">
+      <div class="panel-head"><h2>Do these first</h2><span class="aside">relay queue</span></div>
+      ${top.map((t, i) => {
+        const c = contactOf(t), acc = accountOf(t);
+        return `<button class="row-link" data-act="open" data-id="${t.id}">
+          <span class="n">${i + 1}</span>
+          <span class="t"><b>${esc(c.name)} · ${esc(acc.name)}</b><span>${esc(t.subject)}</span></span>
+          <span class="meta">${Math.round(scoreOf(t))} pts</span>
+        </button>`;
+      }).join("")}
+    </section>
+    <section class="panel">
+      <div class="panel-head"><h2>At risk</h2><span class="aside">account health</span></div>
+      <div class="risk-card">
+        ${atRisk.map((x) => `<div class="big">${esc(x.name)}</div>
+          <div class="facts"><span>${money(x.mrr)}/mo</span><span class="sep">·</span><span>${esc(x.plan)}</span><span class="sep">·</span><span>${esc(x.owner)}</span></div>
+          <p>Low usage since January; wants to cancel before the next cycle.</p>`).join("")}
+        ${atRisk.length ? `<button class="link" style="margin-top:8px" data-act="open" data-id="t-dana">Open the thread →</button>` : `<p>No accounts flagged.</p>`}
+      </div>
+    </section>
+  </div>
+  <section class="panel">
+    <div class="panel-head"><h2>Promises due</h2><span class="aside">relay due · next 24h</span></div>
+    ${a.promises.filter((p) => p.due <= Date.now() + D).map((p) => {
+      const t = state.threads[p.thread], c = contactOf(t);
+      const late = p.due < Date.now();
+      return `<button class="row-link" data-act="open" data-id="${t.id}">
+        <span class="n">#${p.id}</span>
+        <span class="t"><b>${esc(p.text)}</b><span>${esc(c.name)} · ${esc(accountOf(t).name)}</span></span>
+        <span class="meta" style="color:${late ? "var(--red)" : "var(--muted)"}">${late ? "overdue " : ""}${rel(p.due)}</span>
+      </button>`;
+    }).join("") || `<div class="empty" style="padding:14px">No promises in the next 24 hours.</div>`}
+  </section>`;
+}
+
+function viewQueue() {
+  const list = sortedThreads();
+  const max = Math.max(120, ...list.map(scoreOf));
+  const cards = list.map((t, i) => {
+    const c = contactOf(t), acc = accountOf(t);
+    const parts = scoreParts(t);
+    const score = Math.round(scoreOf(t));
+    const expanded = state.expanded.has(t.id);
+    const late = t.slaDue && t.slaDue < Date.now();
+    const answered = !t.waitingSince;
+    const reasons = parts.map((p) => p.label).join(" · ");
+    return `<article class="qcard${answered ? " answered" : ""}"${i === 0 ? ' data-tour="score"' : ""}>
+      <button class="qcard-hit" data-act="open" data-id="${t.id}" aria-label="Open thread: ${esc(t.subject)} with ${esc(c.name)}"></button>
+      <div class="q-rank">${String(i + 1).padStart(2, "0")}</div>
+      <div class="q-main">
+        <div class="q-top">
+          <span class="q-name">${esc(c.name)}</span>
+          <span class="q-co">${esc(acc.name)}</span>
+          <span class="q-wait${late ? " bad" : ""}">${answered ? "answered" : "waiting " + waitFor(t.waitingSince)}</span>
+        </div>
+        <h3 class="q-subject">${esc(t.subject)}</h3>
+        <div class="q-reasons">${esc(reasons)}</div>
+        <div class="q-tags">${t.tags.map((x) => `<span class="tag ${tagClass(x)}">${esc(x)}</span>`).join("")}</div>
+        ${expanded ? `<div class="q-breakdown" id="why-${t.id}" role="region" aria-label="Score breakdown">
+          ${parts.map((p) => `<span class="lbl">${esc(p.label)}</span><span class="pts">+${p.pts.toFixed(1)}</span>`).join("")}
+          <span class="total">score</span><span class="total pts">${score}</span>
+          <span class="why-note">revenue × wait × sentiment × tags × SLA × account health — every point is a reason.</span>
+        </div>` : ""}
+      </div>
+      <div class="q-side">
+        <div class="q-score">${score}<small>pts</small></div>
+        <div class="q-bar"><span class="${late ? "hot" : ""}" style="width:${Math.min(100, (score / max) * 100)}%"></span></div>
+        <button class="q-why" data-act="why" data-id="${t.id}" aria-expanded="${expanded}" aria-controls="why-${t.id}" aria-label="${expanded ? "Hide score breakdown" : "Show score breakdown"}">
+          <span class="why-label">${expanded ? "Hide" : "Why this rank?"}</span> ${icon("chevron")}
+        </button>
+      </div>
+    </article>`;
+  }).join("");
+  return `
+  <div class="view-head">
+    <div>
+      <div class="eyebrow">Priority queue</div>
+      <h1>${list.length} open · ranked by money × wait × risk</h1>
+      <p class="lede">Every point maps to a reason you can read. Open a thread to see the live conversation and the memory behind it.</p>
+    </div>
+    <div class="seg" role="group" aria-label="Sort queue">
+      <button class="${state.sort === "relay" ? "on" : ""}" data-act="sort" data-sort="relay" aria-pressed="${state.sort === "relay"}">Relay score</button>
+      <button class="${state.sort === "mrr" ? "on" : ""}" data-act="sort" data-sort="mrr" aria-pressed="${state.sort === "mrr"}">MRR</button>
+      <button class="${state.sort === "newest" ? "on" : ""}" data-act="sort" data-sort="newest" aria-pressed="${state.sort === "newest"}">Newest</button>
+    </div>
+  </div>
+  <div class="queue" data-tour="queue">${cards}</div>
+  <div class="queue-foot">${icon("queue")} relay queue --json · ranked, with reasons · click any card</div>`;
+}
+
+function viewThread() {
+  const t = state.threads[state.selected] || sortedThreads()[0];
+  if (!t) return `<div class="empty">No open threads.</div>`;
+  const c = contactOf(t), acc = accountOf(t);
+  const msgs = msgsOf(t);
+  const promises = state.promises.filter((p) => p.thread === t.id && p.status === "open");
+  const tasks = state.tasks.filter((x) => x.thread === t.id && x.status === "open");
+  const score = Math.round(scoreOf(t));
+  const late = t.slaDue && t.slaDue < Date.now();
+  return `
+  <button class="back" data-act="nav" data-view="queue">${icon("back")} Queue</button>
+  <div class="thread-top">
+    <div class="person">
+      <div class="avatar xl">${esc(initials(c.name))}</div>
+      <div>
+        <h1>${esc(c.name)}</h1>
+        <p>${esc(acc.name)} · ${esc(c.role)} · ${esc(c.tz)} · ${esc(c.sentiment)}</p>
+      </div>
+    </div>
+    <div class="thread-score"><b>${score}</b><span>relay score</span></div>
+  </div>
+  <div class="thread-subject">
+    <h2>${esc(t.subject)}</h2>
+    <div class="tags">${t.tags.map((x) => `<span class="tag ${tagClass(x)}">${esc(x)}</span>`).join("")}</div>
+    <div class="facts">
+      <span>${money(acc.mrr)} MRR</span><span class="sep">·</span><span>${esc(acc.plan)}</span>
+      <span class="sep">·</span><span>${esc(acc.stage)}</span><span class="sep">·</span><span>${esc(t.assignee)}</span>
+      ${t.waitingSince ? `<span class="sep">·</span><span class="${late ? "bad" : ""}">${late ? slaLabel(t.slaDue) : "waiting " + waitFor(t.waitingSince)}</span>` : `<span class="sep">·</span><span>answered</span>`}
+    </div>
+  </div>
+  <div class="memory-strip">
+    <b>Relay remembers</b>
+    <span class="chip">${promises.length} open promise${promises.length === 1 ? "" : "s"}</span>
+    <span class="chip">${tasks.length} task${tasks.length === 1 ? "" : "s"}</span>
+    ${late ? `<span class="chip bad">${esc(slaLabel(t.slaDue))}</span>` : ""}
+    <span style="margin-left:auto;font-family:var(--mono);font-size:9px">source: SQLite · last sync ${rel(t.updatedAt)}</span>
+  </div>
+  <div class="timeline" data-tour="timeline">
+    ${msgs.map((m) => msgHTML(m)).join("")}
+    ${t.waitingSince && !state.sent[t.id] ? `<div class="wait-marker">${icon("alert")} waiting ${waitFor(t.waitingSince)}${late ? " · " + esc(slaLabel(t.slaDue)) : ""}</div>` : ""}
+  </div>
+  ${composerHTML(t)}`;
+}
+
+function msgHTML(m) {
+  const out = m.dir === "out";
+  return `<div class="msg ${out ? "out" : "in"}">
+    <div class="avatar lg${out ? " me" : ""}">${esc(out ? "AR" : initials(m.author))}</div>
+    <div class="bubble">
+      <div class="msg-head"><b>${esc(m.author)}</b>${out ? '<span class="tag green">agent</span>' : ""}<span>${rel(m.at)} · ${hhmm(m.at)} UTC</span></div>
+      <div class="msg-body">${esc(m.body)}</div>
+    </div>
+  </div>`;
+}
+
+function gateHTML(p, compact = false, extra = "") {
+  const cls = p.decision === "auto_send" ? "is-auto" : p.decision === "requires_approval" ? "is-approval" : p.decision === "draft_only" ? "is-draft" : p.decision === "approved" ? "is-approved" : "is-idle";
+  const note = p.decision === "auto_send" && !p.reasons.length ? '<p class="note">No policy triggers. This reply can send without a human.</p>'
+    : p.decision === "requires_approval" && !p.reasons.length ? '<p class="note">autonomy=approve: every send needs a human.</p>'
+    : p.decision === "draft_only" ? '<p class="note">autonomy=suggest: drafts only, never sends.</p>'
+    : "";
+  return `<div class="gate ${cls}">
+    <div class="gate-line">
+      <span class="gate-dot"></span><b>${esc(p.label)}</b>
+      <span class="gate-tier">autonomy=${esc(p.tier)} · ${p.words} words</span>
+    </div>
+    ${p.reasons.length ? (compact ? `<p class="reasons">${p.reasons.map((r) => esc(r.text)).join(" · ")}</p>` : `<ul>${p.reasons.map((r) => `<li>${esc(r.text)}</li>`).join("")}</ul>`) : note}
+    ${extra}
+  </div>`;
+}
+
+function composerHTML(t) {
+  const c = contactOf(t);
+  if (state.sent[t.id]) {
+    const info = state.sentInfo[t.id] || {};
+    return `<section class="composer panel sent-panel" data-tour="composer">
+      <div class="sent-check">${icon("check")}</div>
+      <div style="min-width:0">
+        <h3>Reply recorded</h3>
+        <p>${info.decision === "auto_send" ? "Auto-sent under the current gate." : "Sent after human approval."} Follow-up scheduled ${rel(info.followupDue)}.${info.promise ? " Promise recorded: " + esc(info.promise) + "." : ""}</p>
+        <div class="actions">
+          <button class="btn small" data-act="nav" data-view="queue">Back to queue</button>
+          <button class="btn small" data-act="nav" data-view="monitor">Open monitor</button>
+        </div>
+      </div>
+    </section>`;
+  }
+  const draft = draftFor(t.id);
+  if (draft) {
+    const p = draft.status === "approved"
+      ? { decision: "approved", label: "Approved · human", reasons: [], words: draft.body.trim().split(/\s+/).length, tier: state.autonomy }
+      : policyFor(t, draft.body);
+    return `<section class="composer panel draft-card" data-tour="composer">
+      <div class="composer-head">
+        <div><div class="eyebrow">Reply</div><h3>Draft #${draft.id}</h3></div>
+        <span class="words">${draft.body.trim() ? draft.body.trim().split(/\s+/).length : 0} / ${WORD_LIMIT} words</span>
+      </div>
+      <div class="draft-body">${esc(draft.body)}</div>
+      <div class="draft-strip">
+        <span class="badge ${draft.status === "approved" ? "auto" : "approval"}">${draft.status === "approved" ? "approved by " + esc(draft.approvedBy) : "pending approval"}</span>
+        <span>policy ${draft.status === "approved" ? "cleared by a human" : "holds this draft"}</span>
+      </div>
+      ${state.composer.promise && state.composer.promiseText.trim() ? `<p class="draft-promise">Will record promise: “${esc(state.composer.promiseText.trim())}”</p>` : ""}
+      <div id="gate">${gateHTML(p, true)}</div>
+      <div class="composer-actions">
+        <button class="btn ghost" data-act="discard" data-id="${t.id}">Discard</button>
+        <div class="spacer"></div>
+        ${draft.status === "pending"
+          ? `<button class="btn amber" data-act="approve" data-id="${t.id}">Approve as human</button>`
+          : `<button class="btn primary" data-act="send" data-id="${t.id}">${icon("send")} Send approved reply</button>`}
+      </div>
+    </section>`;
+  }
+  const p = policyFor(t, state.composer.text);
+  return `<section class="composer panel" data-tour="composer">
+    <div class="composer-head">
+      <div><div class="eyebrow">Reply</div><h3>Write to ${esc(c.name.split(" ")[0])}</h3></div>
+      <span class="words" id="composer-words">${state.composer.text.trim() ? state.composer.text.trim().split(/\s+/).length : 0} / ${WORD_LIMIT} words</span>
+    </div>
+    <label class="sr-only" for="composer-input">Reply to ${esc(c.name)}</label>
+    <textarea id="composer-input" rows="3" placeholder="Read the live thread, then write the reply. Relay checks it before anything sends…">${esc(state.composer.text)}</textarea>
+    <div class="examples">
+      <span>Try:</span>
+      <button class="chip-btn" data-act="example" data-which="safe">Safe reply</button>
+      <button class="chip-btn" data-act="example" data-which="risky">Risky reply</button>
+      <span style="margin-left:2px">or write your own</span>
+    </div>
+    <label class="promise-toggle"><input type="checkbox" id="promise-toggle" ${state.composer.promise ? "checked" : ""}> Record a promise with this reply</label>
+    <div class="promise-fields" id="promise-fields" ${state.composer.promise ? "" : "hidden"}>
+      <input id="promise-text" placeholder="What did you promise?" value="${esc(state.composer.promiseText)}">
+      <select id="promise-due" aria-label="Promise due date">
+        <option value="1h" ${state.composer.promiseDue === "1h" ? "selected" : ""}>in 1 hour</option>
+        <option value="4h" ${state.composer.promiseDue === "4h" ? "selected" : ""}>in 4 hours</option>
+        <option value="1d" ${state.composer.promiseDue === "1d" ? "selected" : ""}>in 1 day</option>
+        <option value="2d" ${state.composer.promiseDue === "2d" ? "selected" : ""}>in 2 days</option>
+      </select>
+    </div>
+    <div id="gate" data-tour="gate">${gateHTML(p, true)}</div>
+    <div class="composer-actions">
+      <button class="btn ghost" data-act="check" data-id="${t.id}">Check policy</button>
+      <div class="spacer"></div>
+      <button class="btn${p.decision === "requires_approval" || p.decision === "draft_only" ? " amber" : ""}" data-act="save-draft" data-id="${t.id}" id="btn-save">${p.decision === "auto_send" ? "Save as draft" : "Save draft for approval"}</button>
+      <button class="btn primary" data-act="send" data-id="${t.id}" id="btn-send" ${p.decision === "auto_send" && state.composer.text.trim() ? "" : "disabled"}>${icon("send")} Send reply</button>
+    </div>
+  </section>`;
+}
+
+function viewMonitor() {
+  const a = alertsData();
+  const fail = a.breached.length + a.overduePromises.length > 0;
+  const report = state.lastReport || { ok: true, mode: "sync", changed: false, report: { source: "webhook", threads_seen: Object.keys(state.threads).length, new_threads: [], new_messages: [], reopened: [], unchanged: Object.keys(state.threads).length } };
+  const payload = buildPayload(state.webhookScenario, false);
+  return `
+  <div class="view-head">
+    <div>
+      <div class="eyebrow">Monitoring</div>
+      <h1>Push, don’t poll</h1>
+      <p class="lede">Webhooks diff new messages into SQLite. Idempotent by external id. The hook runs draft-only.</p>
+    </div>
+    <div class="seg" aria-label="Exit code preview">
+      <span class="badge ${fail ? "draft" : "auto"}">alerts --fail-on-breach · exit ${fail ? 3 : 0}</span>
+    </div>
+  </div>
+  <div class="monitor-grid">
+    <section class="panel">
+      <div class="panel-head"><h2>Alerts</h2><span class="aside">${a.breached.length} breached · ${a.unassigned.length} unowned</span></div>
+      ${a.breached.map((t) => {
+        const c = contactOf(t);
+        return `<div class="alert">
+          <span class="ic">${icon("alert")}</span>
+          <div class="t"><b>${esc(c.name)} · ${esc(accountOf(t).name)}</b><span>${esc(t.subject)}</span></div>
+          <span class="when">${esc(slaLabel(t.slaDue))}</span>
+          <button class="btn small" data-act="open" data-id="${t.id}">Open</button>
+        </div>`;
+      }).join("")}
+      ${a.unassigned.filter((t) => !a.breached.includes(t)).map((t) => {
+        const c = contactOf(t);
+        return `<div class="alert">
+          <span class="ic warn">${icon("shield")}</span>
+          <div class="t"><b>Unowned · ${esc(c.name)}</b><span>${esc(t.subject)}</span></div>
+          <span class="when warn">unassigned</span>
+          <button class="btn small" data-act="open" data-id="${t.id}">Open</button>
+        </div>`;
+      }).join("")}
+      ${a.promises.slice(0, 3).map((p) => {
+        const t = state.threads[p.thread], c = contactOf(t);
+        const late = p.due < Date.now();
+        return `<div class="alert">
+          <span class="ic ${late ? "" : "warn"}">${icon(late ? "alert" : "shield")}</span>
+          <div class="t"><b>Promise #${p.id} · ${esc(c.name)}</b><span>${esc(p.text)}</span></div>
+          <span class="when ${late ? "" : "warn"}">${late ? "overdue " : ""}${rel(p.due)}</span>
+        </div>`;
+      }).join("")}
+      ${!a.breached.length && !a.unassigned.length && !a.promises.length ? '<div class="empty" style="padding:14px">All clear. No breaches, no unowned chats, no open promises.</div>' : ""}
+      <div class="exit-strip">
+        <span>relay alerts --json --fail-on-breach</span>
+        <span class="code ${fail ? "bad" : "ok"}">exit ${fail ? 3 : 0}</span>
+      </div>
+    </section>
+    <section class="panel" data-tour="webhook">
+      <div class="panel-head"><h2>Webhook receiver</h2><span class="aside">127.0.0.1:8787</span></div>
+      <div class="webhook-form">
+        <label class="field" for="webhook-scenario">Inbound payload</label>
+        <select id="webhook-scenario">
+          <option value="reply" ${state.webhookScenario === "reply" ? "selected" : ""}>Customer reply · Priya, invoice</option>
+          <option value="new" ${state.webhookScenario === "new" ? "selected" : ""}>New thread · Nadia at Cobalt</option>
+          <option value="reopen" ${state.webhookScenario === "reopen" ? "selected" : ""}>Reply after resolution · Omar reopens</option>
+        </select>
+        <div class="row">
+          <button class="btn primary" data-act="webhook">${icon("arrow")} Push webhook</button>
+          <button class="btn" data-act="replay">Replay identical payload</button>
+        </div>
+        <details class="payload">
+          <summary>${icon("chevron")} POST /hook · X-Relay-Secret: ••••</summary>
+          <pre style="margin:0;padding:10px;max-height:190px;overflow:auto;font-family:var(--mono);font-size:9.5px;line-height:1.6;color:var(--ink-2);background:var(--panel);border-top:1px solid var(--line)">${hlJSON(payload)}</pre>
+        </details>
+        <div class="serve-line">
+          <span class="chip">secret set</span>
+          <span class="chip">RELAY_DRAFT_ONLY=1</span>
+          <span class="chip">one run at a time</span>
+        </div>
+      </div>
+    </section>
+  </div>
+  <section class="panel terminal">
+    <div class="panel-head"><h2>Last sync report</h2><span class="aside">${state.lastReport ? "changed:" + (state.lastReport.changed ? "true" : "false") : "no payload yet"}</span>
+      <button class="copy-btn" data-act="copy-report">copy</button></div>
+    <pre>${hlJSON(report)}</pre>
+  </section>`;
+}
+
+function viewLearn() {
+  const proposed = state.lessons.filter((l) => l.status === "proposed");
+  const active = state.lessons.filter((l) => l.status === "active");
+  const retired = state.lessons.filter((l) => l.status === "retired");
+  return `
+  <div class="view-head">
+    <div>
+      <div class="eyebrow">Learning</div>
+      <h1>Corrections become policy, deliberately</h1>
+      <p class="lede">A rating is stored. A lesson is proposed. A human promotes it. The soul changes because someone decided it should.</p>
+    </div>
+  </div>
+  <div class="learn-grid">
+    <section class="panel">
+      <div class="panel-head"><h2>Feedback</h2><span class="aside">relay feedback</span></div>
+      <div class="panel-body">
+        <div class="field">
+          <label>How did the last reply land?</label>
+          <div class="rating" role="group" aria-label="Rating out of five">
+            ${[1, 2, 3, 4, 5].map((n) => `<button class="star ${state.rating >= n ? "on" : ""}" data-act="rate" data-n="${n}" aria-label="${n} out of 5" aria-pressed="${state.rating === n}">★</button>`).join("")}
+            <span class="mono" style="font-size:10px;color:var(--muted);margin-left:4px">${state.rating ? state.rating + "/5" : "unrated"}</span>
+          </div>
+        </div>
+        <div class="fb-tags" role="group" aria-label="Feedback tags">
+          ${["Tone", "Accuracy", "Speed", "Empathy"].map((x) => `<button class="fb-tag ${state.fbTags.has(x) ? "on" : ""}" data-act="fbtag" data-tag="${x}" aria-pressed="${state.fbTags.has(x)}">${x}</button>`).join("")}
+        </div>
+        <div class="field">
+          <label for="fb-note">What should change?</label>
+          <textarea id="fb-note" placeholder="e.g. sounded like a retention pitch, not curiosity">${esc(state.fbNote)}</textarea>
+        </div>
+        <button class="btn primary" style="margin-top:9px" data-act="submit-feedback">Submit feedback</button>
+        <div style="margin-top:10px">
+          ${state.feedback.length ? state.feedback.map((f) => `<div class="fb-item">
+            <div class="fb-top"><span class="fb-stars">${stars(f.rating)}</span><span class="badge">${esc(f.source)}</span><span class="mono" style="font-size:9px;color:var(--muted-2)">${rel(f.at)}</span></div>
+            <p>${esc(f.note || "No note.")}</p>
+            <div class="tags" style="margin-top:4px">${f.tags.map((x) => `<span class="tag">${esc(x)}</span>`).join("")}</div>
+            ${f.note ? `<div class="fb-actions"><button class="link" data-act="use-feedback" data-id="${f.id}">Propose a lesson from this →</button></div>` : ""}
+          </div>`).join("") : '<p class="empty">No feedback yet. Rate a reply to start the loop.</p>'}
+        </div>
+      </div>
+    </section>
+    <section class="panel" data-tour="learn">
+      <div class="panel-head"><h2>Lesson pipeline</h2><span class="aside">${proposed.length} proposed · ${active.length} active</span></div>
+      <div class="panel-body" style="padding-bottom:10px">
+        <div class="field"><label for="lesson-scope">Scope</label>
+          <select id="lesson-scope">
+            ${["voice", "flow", "product", "policy"].map((x) => `<option value="${x}" ${state.lessonScope === x ? "selected" : ""}>${x}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field"><label for="lesson-text">Lesson</label>
+          <textarea id="lesson-text" placeholder="One sentence that changes behaviour next shift…">${esc(state.lessonText)}</textarea>
+        </div>
+        <div class="field"><label for="lesson-evidence">Evidence threads</label>
+          <input id="lesson-evidence" placeholder="t-priya, t-dana" value="${esc(state.lessonEvidence)}">
+        </div>
+        <button class="btn" style="margin-top:9px" data-act="propose-lesson">Propose lesson</button>
+      </div>
+      ${[...proposed, ...active, ...retired].map((l) => `<div class="lesson ${l.status === "retired" ? "retired" : ""}">
+        <div class="lesson-top"><span class="tag">${esc(l.scope)}</span><span class="badge ${l.status === "active" ? "auto" : l.status === "proposed" ? "approval" : ""}">${esc(l.status)}</span></div>
+        <p>${esc(l.text)}</p>
+        <div class="lesson-foot">
+          <span class="ev">${l.evidence ? "evidence: " + esc(l.evidence) : "no evidence"}</span>
+          ${l.status === "proposed" ? `<button class="btn small amber" data-act="promote" data-id="${l.id}">Promote as human</button>` : ""}
+          ${l.status === "active" ? `<button class="btn small" data-act="retire" data-id="${l.id}">Retire</button>` : ""}
+        </div>
+      </div>`).join("")}
+    </section>
+  </div>
+  <section class="panel soul-panel">
+    <div class="panel-head"><h2>soul.md</h2><span class="aside">relay soul --with-lessons</span></div>
+    <div class="soul">
+      <div class="line"><b>Name</b><span>Alex — a support agent. Never pretends to be human.</span></div>
+      <div class="line"><b>Voice</b><span>Warm, specific, unhurried. Curious about the work, never a retention pitch.</span></div>
+      <div class="line"><b>Truth</b><span>Read the live thread first. Never claim a fix shipped unless the browser shows it.</span></div>
+      <div class="line"><b>Limits</b><span>Billing, security, legal and VIP threads need a human. Draft-only after hours.</span></div>
+      ${active.length ? `<div class="learned"><b>Learned on the job · ${active.length}</b>${active.map((l) => esc(l.text)).join("<br>")}</div>` : `<div class="learned" style="background:var(--paper-2);border-left-color:var(--line)"><b style="color:var(--muted)">Learned on the job</b>No active lessons yet. Promote one to see it load with the soul.</div>`}
+    </div>
+  </section>`;
+}
+
+/* ------------------------------------------------------------------ render: inspector */
+function renderInspector() {
+  const t = state.threads[state.selected];
+  const onThread = state.view === "thread" && t;
+  let gate;
+  if (onThread) {
+    const draft = draftFor(t.id);
+    if (state.sent[t.id]) {
+      const p = { decision: "approved", label: "Sent · recorded", reasons: [], words: 0, tier: state.autonomy };
+      gate = `<div class="gate is-approved"><div class="gate-line"><span class="gate-dot"></span><b>${p.label}</b><span class="gate-tier">post-send</span></div><p class="note">Outbound message, follow-up task and any promise are in SQLite. Verify the DOM before recording next time.</p></div>`;
+    } else if (draft) {
+      const p = draft.status === "approved"
+        ? { decision: "approved", label: "Approved · human", reasons: [], words: draft.body.trim().split(/\s+/).length, tier: state.autonomy }
+        : policyFor(t, draft.body);
+      gate = gateHTML(p);
+    } else {
+      gate = gateHTML(policyFor(t, state.composer.text));
+    }
+  } else {
+    gate = `<div class="gate is-idle"><div class="gate-line"><span class="gate-dot"></span><b>Gate idle</b><span class="gate-tier">autonomy=${esc(state.autonomy)}</span></div><p class="note">Open a thread and start a reply. Policy is enforced by <span class="mono">relay send</span>, not by prompt wording.</p></div>`;
+  }
+
+  const mem = onThread ? memoryHTML(t) : globalMemoryHTML();
+  const traceHTML = state.trace.slice(0, 24).map((e) => `<div class="trace-item">
+    <span class="t-dot ${esc(e.kind)}"></span>
+    <div class="tx">${esc(e.text)}<div class="tm">${hhmm(e.at)} UTC · ${esc(e.kind)}</div></div>
+  </div>`).join("");
+
+  $("#inspector").innerHTML = `
+    <div class="insp-head"><span class="t">Inspector</span>
+      <div class="tabs" role="tablist" aria-label="Inspector panels">
+        <button role="tab" aria-selected="${state.tab === "trace"}" class="${state.tab === "trace" ? "on" : ""}" data-act="tab" data-tab="trace">Trace</button>
+        <button role="tab" aria-selected="${state.tab === "memory"}" class="${state.tab === "memory" ? "on" : ""}" data-act="tab" data-tab="memory">Memory</button>
+      </div>
+    </div>
+    <div class="insp-gate" data-tour="inspector-gate">${gate}</div>
+    <div class="insp-section">
+      <div class="insp-label">${state.tab === "trace" ? "Event trace" : "Durable facts"}<span class="count">${state.tab === "trace" ? state.trace.length + " events" : ""}</span></div>
+      <div id="inspector-body">${state.tab === "trace" ? `<div class="trace" aria-live="off">${traceHTML}</div>` : mem}</div>
+    </div>`;
+}
+
+function memoryHTML(t) {
+  const c = contactOf(t), a = accountOf(t);
+  const promises = state.promises.filter((p) => p.thread === t.id);
+  const tasks = state.tasks.filter((x) => x.thread === t.id);
+  return `
+    <div class="mem-block"><div class="k">Account</div><div class="v">${esc(a.name)}</div><div class="s">${esc(a.plan)} · ${money(a.mrr)}/mo · ${esc(a.stage)} · ${esc(a.owner)}</div></div>
+    <div class="mem-block"><div class="k">Contact</div><div class="v">${esc(c.name)}</div><div class="s">${esc(c.role)} · ${esc(c.tz)} · ${esc(c.sentiment)} · ${esc(c.email)}</div></div>
+    <div class="mem-block"><div class="k">Thread</div><div class="v" style="font-size:11px">${esc(t.subject)}</div><div class="s">${t.waitingSince ? "waiting " + waitFor(t.waitingSince) : "answered"} · ${esc(t.assignee)} · ${t.tags.map(esc).join(", ")}</div></div>
+    <div class="mem-block"><div class="k">Open promises</div>
+      ${promises.length ? `<ul class="mem-list">${promises.map((p) => `<li><span>${esc(p.text)}</span><span class="due ${p.due < Date.now() && p.status === "open" ? "bad" : ""}">${p.status === "open" ? rel(p.due) : p.status}</span></li>`).join("")}</ul>` : '<div class="s">None recorded.</div>'}
+    </div>
+    <div class="mem-block"><div class="k">Tasks</div>
+      ${tasks.length ? `<ul class="mem-list">${tasks.map((x) => `<li><span>${esc(x.title)}</span><span class="due ${x.due < Date.now() && x.status === "open" ? "bad" : ""}">${x.status === "open" ? rel(x.due) : x.status}</span></li>`).join("")}</ul>` : '<div class="s">None open.</div>'}
+    </div>
+    <div class="mem-block"><div class="k">Provenance</div><div class="s">Durable facts live in SQLite. The browser is the last mile; if CRM and Relay disagree, the CRM wins.</div></div>`;
+}
+function globalMemoryHTML() {
+  const a = alertsData();
+  return `
+    <div class="mem-block"><div class="k">Store</div><div class="v">relay.db</div><div class="s">${Object.keys(state.accounts).length} accounts · ${Object.keys(state.contacts).length} contacts · ${Object.keys(state.threads).length} threads</div></div>
+    <div class="mem-block"><div class="k">Waiting on us</div><div class="v">${a.waiting.length}</div><div class="s">${a.breached.length} past SLA · ${a.unassigned.length} unowned</div></div>
+    <div class="mem-block"><div class="k">Open promises</div><div class="v">${a.promises.length}</div><div class="s">${a.overduePromises.length} overdue · relay due</div></div>
+    <div class="mem-block"><div class="k">Pipeline</div><div class="v">${state.lessons.filter((l) => l.status === "proposed").length} proposed · ${state.lessons.filter((l) => l.status === "active").length} active</div><div class="s">relay learn</div></div>`;
+}
+
+/* ------------------------------------------------------------------ policy UI updates */
+function updateGate() {
+  const t = state.threads[state.selected];
+  if (!t || state.view !== "thread" || state.sent[t.id] || draftFor(t.id)) return;
+  const p = policyFor(t, state.composer.text);
+  const gate = $("#gate");
+  if (gate) gate.innerHTML = gateHTML(p, true);
+  const swap = $("#inspector-gate");
+  if (swap) swap.innerHTML = gateHTML(p);
+  const words = $("#composer-words");
+  if (words) {
+    words.textContent = (state.composer.text.trim() ? state.composer.text.trim().split(/\s+/).length : 0) + " / " + WORD_LIMIT + " words";
+    words.classList.toggle("over", p.words > WORD_LIMIT);
+  }
+  const send = $("#btn-send");
+  if (send) {
+    send.disabled = !(p.decision === "auto_send" && state.composer.text.trim());
+    send.title = send.disabled ? "The gate requires a saved draft and human approval" : "Send this reply";
+  }
+  const save = $("#btn-save");
+  if (save) {
+    save.classList.toggle("amber", p.decision === "requires_approval" || p.decision === "draft_only");
+    save.textContent = p.decision === "auto_send" ? "Save as draft" : "Save draft for approval";
+  }
+  const pf = $("#promise-fields");
+  if (pf) pf.hidden = !state.composer.promise;
+}
+
+/* ------------------------------------------------------------------ actions */
+function openThread(id) {
+  state.selected = id;
+  state.view = "thread";
+  resetComposer();
+  trace("policy", "opened " + id + " · live thread + memory bundle");
+  render();
+  $("#stage").scrollTop = 0;
+}
+
+function saveDraft() {
+  const t = state.threads[state.selected];
+  if (!t) return;
+  const body = state.composer.text.trim();
+  if (!body) return toast("Write a reply first.", "amber");
+  state.draftId += 1;
+  const draft = { id: state.draftId, thread: t.id, body, status: "pending", approvedBy: null, at: Date.now() };
+  state.drafts = state.drafts.filter((d) => !(d.thread === t.id && (d.status === "pending" || d.status === "approved")));
+  state.drafts.push(draft);
+  const p = policyFor(t, body);
+  trace("policy", "relay draft " + t.id + " → draft #" + draft.id + " · " + p.decision + (p.reasons[0] ? " (" + p.reasons[0].text + ")" : ""));
+  toast("Draft #" + draft.id + " saved. A human must approve it.", "amber");
+  render();
+}
+
+function approveDraft() {
+  const t = state.threads[state.selected];
+  const draft = t && draftFor(t.id);
+  if (!draft) return;
+  draft.status = "approved";
+  draft.approvedBy = "you";
+  trace("approve", "relay approve " + draft.id + " --by you · human decision recorded");
+  toast("Draft #" + draft.id + " approved by you.");
+  render();
+}
+
+function discardDraft() {
+  const t = state.threads[state.selected];
+  const draft = t && draftFor(t.id);
+  if (!draft) return;
+  draft.status = "discarded";
+  trace("draft", "discarded draft #" + draft.id + " on " + t.id);
+  render();
+}
+
+function sendReply() {
+  const t = state.threads[state.selected];
+  if (!t) return;
+  const draft = draftFor(t.id);
+  let body;
+  if (draft) {
+    if (draft.status !== "approved") return toast("Approve the draft first.", "amber");
+    body = draft.body;
+  } else {
+    body = state.composer.text.trim();
+    if (!body) return toast("Write a reply first.", "amber");
+    const p = policyFor(t, body);
+    if (p.decision !== "auto_send") {
+      trace("refuse", "relay send " + t.id + " → refused · " + p.decision + " (" + (p.reasons[0]?.text || "policy") + ")");
+      return toast("The gate refused this send. Save a draft and approve it as a human.", "bad");
+    }
+  }
+  if (state.composer.promise && !state.composer.promiseText.trim()) {
+    return toast("Add the promise text, or untick the promise.", "amber");
+  }
+  const last = lastMsg(t);
+  if (last && last.dir === "out") {
+    trace("refuse", "relay send " + t.id + " → refused · last message is already outbound");
+    return toast("Last message is already outbound. Relay refuses a double-send.", "bad");
+  }
+
+  const at = Date.now();
+  const p = draft ? { decision: "sent_after_approval", reasons: [] } : policyFor(t, body);
+  state.messages[t.id].push({ id: uid("out"), dir: "out", author: "Alex (Relay)", at, body });
+  t.waitingSince = null;
+  t.slaDue = null;
+  t.updatedAt = at;
+  t.status = "open";
+  state.sendsToday += 1;
+
+  const followupDue = Date.now() + 2 * D;
+  state.tasks.push({ id: state.tasks.length + 1, thread: t.id, kind: "followup", title: "Follow up if no reply", due: followupDue, status: "open" });
+
+  let promise = null;
+  if (state.composer.promise && state.composer.promiseText.trim()) {
+    const hours = { "1h": 1, "4h": 4, "1d": 24, "2d": 48 }[state.composer.promiseDue] || 24;
+    state.promises.push({ id: state.promises.length + 1, thread: t.id, text: state.composer.promiseText.trim(), due: Date.now() + hours * H, status: "open" });
+    promise = state.composer.promiseText.trim();
+  }
+
+  if (draft) {
+    draft.status = "sent";
+    trace("send", "relay send " + t.id + " --draft " + draft.id + " --by agent → sent · follow-up 2d" + (promise ? " · promise recorded" : ""));
+  } else {
+    trace("send", "relay send " + t.id + " → auto_send · follow-up 2d" + (promise ? " · promise recorded" : ""));
+  }
+  trace("send", "SLA cleared on " + t.id + " · waiting clock stopped · queue re-ranked");
+
+  state.sent[t.id] = true;
+  state.sentInfo[t.id] = { at, decision: draft ? "sent_after_approval" : p.decision, followupDue, promise };
+  resetComposer();
+  toast(promise ? "Sent · follow-up scheduled · promise recorded." : "Sent · follow-up scheduled in 2 days.");
+  render();
+}
+
+/* ------------------------------------------------------------------ webhook */
+function buildPayload(scenario, withTimes = true) {
+  const now = Date.now();
+  const iso = (ts) => new Date(ts).toISOString();
+  if (scenario === "new") {
+    return {
+      source: "webhook",
+      threads: [{
+        id: "t-nadia", subject: "SSO for the design team", channel: "email", status: "open",
+        account: { id: "cobalt", name: "Cobalt Studio", plan: "Team · 18 seats", mrr: 980, stage: "Evaluation", owner: "Alex Rivera", health: "ok" },
+        contact: { id: "nadia", name: "Nadia Rahman", email: "nadia@cobalt.studio", role: "Design lead", tz: "GMT", sentiment: "Warm" },
+        assignee: "Alex Rivera", tags: ["Security", "SSO"], summary: "Wants SSO before rolling out to 18 designers.",
+        waiting_since: iso(now), sla_due: iso(now + 4 * H),
+        messages: [{ external_id: "wh-nadia-1", direction: "in", author: "Nadia Rahman", body: "Hi — we're rolling out to 18 designers next month. Can we get SSO on the Team plan, and what does setup look like?", sent_at: iso(now) }],
+      }],
+    };
+  }
+  if (scenario === "reopen") {
+    return {
+      source: "webhook",
+      threads: [{
+        id: "t-omar", subject: "Scheduled CSV export for monthly reporting", channel: "email", status: "open",
+        account: { id: "brightside", name: "Brightside" },
+        contact: { id: "omar", name: "Omar Haddad" },
+        assignee: "Alex Rivera", tags: ["How-to", "Reporting"], summary: "Wants a scheduled CSV export of usage data for the monthly board pack.",
+        waiting_since: iso(now), sla_due: iso(now + 4 * H),
+        messages: [{ external_id: "wh-omar-1", direction: "in", author: "Omar Haddad", body: "Actually one follow-up — the scheduled export worked, but can I send it to two addresses?", sent_at: iso(now) }],
+      }],
+    };
+  }
+  return {
+    source: "webhook",
+    threads: [{
+      id: "t-priya", subject: "Renewal invoice — VAT ID missing", channel: "email", status: "open",
+      account: { id: "loomly", name: "Loomly" },
+      contact: { id: "priya", name: "Priya Raman" },
+      assignee: "Alex Rivera", tags: ["Billing", "Expansion", "Priority"],
+      summary: "Renewal invoice needs VAT DE327441920 so AP can raise the PO before Friday.",
+      waiting_since: iso(now), sla_due: iso(now + 4 * H),
+      messages: [{ external_id: "wh-priya-1", direction: "in", author: "Priya Raman", body: "Any update on the reissued invoice? Our PO cutoff is noon tomorrow — if it misses that we slip a cycle.", sent_at: iso(now) }],
+    }],
+  };
+}
+
+function applyWebhook(payload) {
+  const now = Date.now();
+  const report = { source: "webhook", threads_seen: Object.keys(state.threads).length, new_threads: [], new_messages: [], reopened: [], unchanged: 0 };
+  const touched = new Set();
+  for (const item of payload.threads) {
+    let t = state.threads[item.id];
+    const isNew = !t;
+    if (!t) {
+      if (item.account && item.account.id && !state.accounts[item.account.id]) {
+        state.accounts[item.account.id] = { id: item.account.id, name: item.account.name, domain: "", plan: item.account.plan || "", mrr: item.account.mrr || 0, stage: item.account.stage || "", owner: item.account.owner || "", health: item.account.health || "ok" };
+      }
+      if (item.contact && item.contact.id && !state.contacts[item.contact.id]) {
+        state.contacts[item.contact.id] = { id: item.contact.id, name: item.contact.name, account: item.account?.id, email: item.contact.email || "", role: item.contact.role || "", tz: item.contact.tz || "", sentiment: item.contact.sentiment || "Neutral" };
+      }
+      t = state.threads[item.id] = {
+        id: item.id, account: item.account?.id, contact: item.contact?.id, subject: item.subject || "(no subject)",
+        channel: "email", status: "open", waitingSince: now, slaDue: now + 4 * H,
+        assignee: item.assignee || "Unassigned", summary: item.summary || "",
+        tags: item.tags || [], updatedAt: now,
+      };
+      state.messages[t.id] = [];
+      report.new_threads.push({ thread: t.id, subject: t.subject, contact: state.contacts[t.contact]?.name, company: state.accounts[t.account]?.name });
+      trace("sync", "new thread " + t.id + " · " + state.contacts[t.contact]?.name + " · webhook");
+    }
+    let added = 0;
+    for (const m of item.messages || []) {
+      if (state.msgKeys.has(m.external_id)) continue;
+      state.msgKeys.add(m.external_id);
+      state.messages[t.id].push({ id: m.external_id, dir: m.direction || "in", author: m.author, at: now, body: m.body });
+      added += 1;
+      if (t.status === "resolved") {
+        report.reopened.push(t.id);
+        trace("sync", "reopened " + t.id + " · customer replied after resolution");
+      }
+      t.status = "open";
+      t.waitingSince = now;
+      t.slaDue = now + 4 * H;
+      t.updatedAt = now;
+      delete state.sent[t.id];
+      delete state.sentInfo[t.id];
+      if (!isNew) touched.add(t.id);
+    }
+    if (added) report.new_messages.push({ thread: t.id, count: added, contact: state.contacts[t.contact]?.name, preview: (item.messages[item.messages.length - 1].body || "").slice(0, 110) });
+  }
+  report.threads_seen = Object.keys(state.threads).length;
+  report.unchanged = report.threads_seen - report.new_threads.length - touched.size;
+  if (report.unchanged < 0) report.unchanged = 0;
+  const changed = report.new_threads.length > 0 || report.new_messages.length > 0 || report.reopened.length > 0;
+  return { ok: true, mode: "sync", changed, report };
+}
+
+function pushWebhook(replay = false) {
+  let payload;
+  if (replay) {
+    if (!state.lastPayload) return toast("Push a webhook first, then replay it.", "amber");
+    payload = state.lastPayload;
+  } else {
+    payload = buildPayload(state.webhookScenario);
+    state.lastPayload = payload;
+    if (state.webhookScenario === "reopen") {
+      const omar = state.threads["t-omar"];
+      if (omar && omar.status === "open" && !state.msgKeys.has("wh-omar-1")) {
+        omar.status = "resolved";
+        omar.waitingSince = null;
+        omar.slaDue = null;
+        trace("send", "resolved t-omar · ticket closed before the reopen demo");
+      }
+    }
+  }
+  const out = applyWebhook(payload);
+  state.lastReport = out;
+  trace("webhook", "POST /hook · " + (replay ? "identical payload" : state.webhookScenario) + " → changed:" + out.changed + (out.report.new_messages.length ? " · " + out.report.new_messages.map((m) => m.count + " new on " + m.thread).join(", ") : "") + (out.report.reopened.length ? " · reopened " + out.report.reopened.join(", ") : ""));
+  if (out.changed) {
+    toast("changed:true · " + (out.report.new_threads.length ? out.report.new_threads.length + " new thread · " : "") + (out.report.new_messages.length ? out.report.new_messages.map((m) => m.count + " new message").join(", ") : "") + (out.report.reopened.length ? " · reopened" : ""));
+  } else {
+    toast("changed:false · external ids already seen. Sync is idempotent.", "amber");
+  }
+  if (state.view !== "monitor") {
+    // The report is on Monitor; navigate there so the result is visible.
+    state.view = "monitor";
+  }
+  render();
+}
+
+/* ------------------------------------------------------------------ learning */
+function submitFeedback() {
+  const note = state.fbNote.trim();
+  if (!state.rating) return toast("Pick a rating first.", "amber");
+  if (!note && !state.fbTags.size) return toast("Add a tag or a note.", "amber");
+  state.feedback.unshift({ id: Date.now(), rating: state.rating, tags: [...state.fbTags], note, source: "human", at: Date.now() });
+  trace("lesson", "relay feedback · " + state.rating + "/5" + (state.fbTags.size ? " · " + [...state.fbTags].join(", ") : "") + (note ? " · " + note.slice(0, 48) : ""));
+  state.fbNote = "";
+  state.fbTags = new Set();
+  state.rating = 0;
+  toast("Feedback stored. One conversation does not rewrite the soul.");
+  render();
+}
+function proposeLesson() {
+  const text = state.lessonText.trim();
+  if (!text) return toast("Write the lesson first.", "amber");
+  state.lessonSeq += 1;
+  state.lessons.push({ id: state.lessonSeq, scope: state.lessonScope, text, evidence: state.lessonEvidence.trim(), status: "proposed", at: Date.now() });
+  trace("lesson", "relay lesson add --scope " + state.lessonScope + " → proposed #" + state.lessonSeq);
+  state.lessonText = "";
+  state.lessonEvidence = "";
+  toast("Lesson proposed. Promotion is a human decision.");
+  render();
+}
+function promoteLesson(id) {
+  const l = state.lessons.find((x) => x.id === id);
+  if (!l) return;
+  l.status = "active";
+  l.promotedBy = "you";
+  trace("lesson", "relay lesson promote " + id + " --by you → active · loads with soul next shift");
+  toast("Promoted. It loads with soul --with-lessons now.");
+  render();
+}
+function retireLesson(id) {
+  const l = state.lessons.find((x) => x.id === id);
+  if (!l) return;
+  l.status = "retired";
+  trace("lesson", "relay lesson retire " + id + " → retired");
+  render();
+}
+
+/* ------------------------------------------------------------------ tour */
+const TOUR = [
+  { target: "queue", title: "Start with the queue", body: "Four open threads, ranked by revenue × wait × sentiment × tags × SLA × account health. The order is arithmetic, not a vibe.", apply() { state.view = "queue"; state.sort = "relay"; state.expanded.clear(); } },
+  { target: "score", title: "Every point is a reason", body: "The breakdown shows where 107 comes from: $290 MRR, two days of waiting, churn risk, a frustrated tone and a breached SLA. Open “Why this rank?” on any card to audit it.", apply() { state.view = "queue"; state.sort = "relay"; state.expanded.add("t-dana"); } },
+  { target: "timeline", title: "Read the live thread first", body: "The CRM is the source of truth for the conversation. Relay holds the durable facts: account, promises, tasks, SLA. If they disagree, the CRM wins.", apply() { state.view = "thread"; state.selected = "t-dana"; resetComposer(); } },
+  { target: "composer", title: "Draft in the open", body: "Write the reply here. Nothing sends yet. Relay evaluates the text against the policy gate as you type.", apply() { state.view = "thread"; state.selected = "t-dana"; } },
+  { target: "gate", title: "The gate is code, not a prompt", body: "“Churn risk” and the word “discount” both trip it. A sensitive thread always needs a human, no matter how the model phrases the reply.", apply() { state.view = "thread"; state.selected = "t-dana"; if (!state.composer.text) state.composer.text = EXAMPLES["t-dana"].risky; } },
+  { target: "gate", title: "Approve, then send", body: "Save the draft, approve it as a human, and only then can it send. The audit row records who approved it.", apply() { state.view = "thread"; state.selected = "t-dana"; } },
+  { target: "webhook", title: "Push, don’t poll", body: "A webhook diffs new messages into SQLite. The hook runs draft-only. Push the same payload twice: the second time changes nothing.", apply() { state.view = "monitor"; } },
+  { target: "learn", title: "Learn on purpose", body: "A correction becomes a proposed lesson. A human promotes it. The soul changes because someone decided it should — not because one conversation did.", apply() { state.view = "learn"; } },
+];
+
+function startTour() {
+  const el = $("#toast");
+  if (el) el.className = "toast";
+  state.tour = { active: true, step: 0 };
+  TOUR[0].apply();
+  trace("policy", "guided tour started · 8 steps");
+  render();
+  applyTourStep();
+}
+function tourGo(delta) {
+  const next = state.tour.step + delta;
+  if (next >= TOUR.length) return endTour("Tour finished. The demo is yours.");
+  if (next < 0) return;
+  state.tour.step = next;
+  TOUR[next].apply();
+  render();
+  applyTourStep();
+}
+function endTour(msg) {
+  state.tour.active = false;
+  render();
+  if (msg) toast(msg);
+}
+function applyTourStep() {
+  $$(".tour-focus").forEach((el) => el.classList.remove("tour-focus"));
+  const bar = $("#tourbar");
+  if (!state.tour.active) { bar.hidden = true; return; }
+  const step = TOUR[state.tour.step];
+  bar.hidden = false;
+  bar.innerHTML = `<span class="step">Step ${state.tour.step + 1} / ${TOUR.length}</span>
+    <div class="tbody"><h4>${esc(step.title)}</h4><p>${esc(step.body)}</p>
+      <div class="tacts">
+        <button class="tbtn" data-act="tour-prev" ${state.tour.step === 0 ? "disabled" : ""}>Back</button>
+        <button class="tbtn next" data-act="tour-next">${state.tour.step === TOUR.length - 1 ? "Finish" : "Next"}</button>
+        <button class="tbtn" data-act="tour-skip" style="background:transparent;border-color:transparent;color:#8f8b79">Skip</button>
+      </div>
+    </div>
+    <button class="close" data-act="tour-skip" aria-label="Close tour">×</button>`;
+  const el = document.querySelector(`[data-tour="${step.target}"]`);
+  if (el) {
+    el.classList.add("tour-focus");
+    requestAnimationFrame(() => el.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+  }
+}
+
+/* ------------------------------------------------------------------ JSON highlight */
+function hlJSON(obj) {
+  const json = JSON.stringify(obj, null, 2);
+  return esc(json)
+    .replace(/&quot;([^&]*?)&quot;:/g, '<span class="k">&quot;$1&quot;</span>:')
+    .replace(/: &quot;([^&]*?)&quot;/g, ': <span class="s">&quot;$1&quot;</span>')
+    .replace(/: (true|false|null)/g, ': <span class="b">$1</span>')
+    .replace(/: (-?\d+(?:\.\d+)?)/g, ': <span class="n">$1</span>');
+}
+
+/* ------------------------------------------------------------------ examples */
+const EXAMPLES = {
+  "t-priya": {
+    safe: "The invoice is reissued with VAT DE327441920 and copied to your AP inbox. It should reach you well before Friday.",
+    risky: "I can offer a 10% discount on the renewal and confirm the VAT ID is on the invoice.",
+  },
+  "t-marcus": {
+    safe: "Here is the SAML metadata and ACS URL. SCIM provisioning is included on Growth — I'll send the setup doc separately.",
+    risky: "Security review is done and we can sign the DPA this week.",
+  },
+  "t-dana": {
+    safe: "That's fair, and I'm sorry the reports haven't fit how you work. Which two reports matter most? I'd like to see if the current setup can be adjusted before you decide.",
+    risky: "I can offer a discount or cancel the renewal if the reports still don't fit.",
+  },
+  "t-omar": {
+    safe: "Yes. Open Settings → Exports, choose Schedule monthly, and pick the first of the month. It emails a CSV to your ops inbox.",
+    risky: "Yes — and I can add a custom export to the roadmap if you need a different format.",
+  },
+};
+
+/* ------------------------------------------------------------------ events */
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-act]");
+  if (!el) return;
+  const act = el.dataset.act;
+  const id = el.dataset.id;
+
+  if (act === "nav") { state.view = el.dataset.view; if (state.view === "thread" && !state.threads[state.selected]) state.selected = sortedThreads()[0]?.id; render(); $("#stage").scrollTop = 0; }
+  else if (act === "open") openThread(id);
+  else if (act === "sort") { state.sort = el.dataset.sort; renderStage(); }
+  else if (act === "why") {
+    if (state.expanded.has(id)) state.expanded.delete(id); else state.expanded.add(id);
+    renderStage();
+    document.querySelector('[data-act="why"][data-id="' + id + '"]')?.focus();
+  }
+  else if (act === "example") {
+    const t = state.threads[state.selected];
+    state.composer.text = EXAMPLES[t.id]?.[el.dataset.which] || "";
+    const ta = $("#composer-input");
+    if (ta) { ta.value = state.composer.text; ta.focus(); }
+    updateGate();
+    const p = policyFor(t, state.composer.text);
+    trace("policy", "relay check " + t.id + " → " + p.decision + (p.reasons.length ? " (" + p.reasons.map((r) => r.text).join("; ") + ")" : ""));
+  }
+  else if (act === "check") {
+    const t = state.threads[state.selected];
+    const p = policyFor(t, state.composer.text);
+    updateGate();
+    trace("policy", "relay check " + t.id + " → " + p.decision + (p.reasons.length ? " (" + p.reasons.map((r) => r.text).join("; ") + ")" : " · no triggers"));
+    toast(p.decision === "auto_send" ? "check → auto_send" : "check → " + p.decision + " · " + (p.reasons[0]?.text || "policy"), p.decision === "auto_send" ? "" : "amber");
+  }
+  else if (act === "save-draft") saveDraft();
+  else if (act === "approve") approveDraft();
+  else if (act === "discard") discardDraft();
+  else if (act === "send") sendReply();
+  else if (act === "webhook") pushWebhook(false);
+  else if (act === "replay") pushWebhook(true);
+  else if (act === "copy-report") {
+    const text = JSON.stringify(state.lastReport || {}, null, 2);
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast("Sync report copied.")).catch(() => toast("Copy failed.", "bad"));
+    else toast("Clipboard unavailable.", "bad");
+  }
+  else if (act === "rate") { state.rating = Number(el.dataset.n); renderStage(); }
+  else if (act === "fbtag") {
+    const tag = el.dataset.tag;
+    if (state.fbTags.has(tag)) state.fbTags.delete(tag); else state.fbTags.add(tag);
+    renderStage();
+  }
+  else if (act === "submit-feedback") submitFeedback();
+  else if (act === "use-feedback") {
+    const f = state.feedback.find((x) => String(x.id) === String(id));
+    if (!f) return;
+    state.lessonText = f.note;
+    state.lessonEvidence = "t-dana";
+    state.lessonScope = "voice";
+    renderStage();
+    $("#lesson-text")?.focus();
+    toast("Pulled the correction into a lesson proposal.", "amber");
+  }
+  else if (act === "propose-lesson") proposeLesson();
+  else if (act === "promote") promoteLesson(Number(id));
+  else if (act === "retire") retireLesson(Number(id));
+  else if (act === "tab") { state.tab = el.dataset.tab; renderInspector(); }
+  else if (act === "tour-start") startTour();
+  else if (act === "tour-next") tourGo(1);
+  else if (act === "tour-prev") tourGo(-1);
+  else if (act === "tour-skip") endTour("Tour closed. Everything still works.");
+  else if (act === "reset") {
+    state = seedState();
+    for (const tid in state.messages) for (const m of state.messages[tid]) state.msgKeys.add(m.id);
+    render();
+    toast("Demo reset.");
+  }
+});
+
+document.addEventListener("input", (e) => {
+  if (e.target.id === "composer-input") { state.composer.text = e.target.value; updateGate(); }
+  else if (e.target.id === "promise-text") state.composer.promiseText = e.target.value;
+  else if (e.target.id === "fb-note") state.fbNote = e.target.value;
+  else if (e.target.id === "lesson-text") state.lessonText = e.target.value;
+  else if (e.target.id === "lesson-evidence") state.lessonEvidence = e.target.value;
+});
+
+document.addEventListener("change", (e) => {
+  if (e.target.id === "promise-toggle") { state.composer.promise = e.target.checked; updateGate(); }
+  else if (e.target.id === "promise-due") state.composer.promiseDue = e.target.value;
+  else if (e.target.id === "lesson-scope") state.lessonScope = e.target.value;
+  else if (e.target.id === "webhook-scenario") { state.webhookScenario = e.target.value; renderStage(); }
+  else if (e.target.id === "autonomy-select") {
+    state.autonomy = e.target.value;
+    const chip = $("#rail-gate");
+    if (chip) chip.textContent = state.autonomy;
+    trace("policy", "autonomy=" + state.autonomy + " (simulated) · policy re-evaluated");
+    render();
+    toast("Gate set to " + state.autonomy + ". Try the same reply again.", "amber");
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && state.tour.active) endTour("Tour closed.");
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && e.target.id === "composer-input") {
+    e.preventDefault();
+    const t = state.threads[state.selected];
+    if (!t) return;
+    const p = draftFor(t.id) ? null : policyFor(t, state.composer.text);
+    if (p && p.decision !== "auto_send") saveDraft(); else sendReply();
+  }
+});
+
+/* ------------------------------------------------------------------ boot */
+function render() {
+  renderRail();
+  renderStage();
+  renderInspector();
+  const sel = $("#autonomy-select");
+  if (sel) sel.value = state.autonomy;
+  applyTourStep();
+}
+function tickClock() {
+  const clock = $("#clock");
+  if (clock) clock.textContent = hhmm() + " UTC";
+}
+tickClock();
+setInterval(tickClock, 30000);
+render();
+</script>
+</body>
+</html>

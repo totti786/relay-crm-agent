@@ -1,0 +1,45 @@
+{
+  "_comment": "Normalised snapshot written by OpenCode + Browse after reading the GoHighLevel Conversations UI. No HighLevel API, OAuth token or webhook is used. Ingest with: ./relay sync examples/gohighlevel-browser-snapshot.json",
+  "source": "gohighlevel-browser",
+  "location_id": "LOCATION_ID",
+  "threads": [
+    {
+      "id": "ghl-conv-8f3c2a",
+      "subject": "SMS · Jules Moreau",
+      "channel": "sms",
+      "status": "open",
+      "assignee": "Alex Rivera",
+      "summary": "Onboarding link expired; trial ends Friday.",
+      "tags": ["SMS", "Onboarding"],
+      "waiting_since": "2026-11-26T09:12:00Z",
+      "sla_due": "2026-11-26T13:12:00Z",
+      "account": {
+        "id": "acme",
+        "name": "Acme Corp",
+        "domain": "acme.com",
+        "plan": "Scale · 50 seats",
+        "mrr": 3900,
+        "stage": "Negotiation",
+        "owner": "Alex Rivera",
+        "health": "ok"
+      },
+      "contact": {
+        "id": "ghl-contact-jules",
+        "name": "Jules Moreau",
+        "email": "jules@acme.com",
+        "role": "VP Engineering",
+        "tz": "CET",
+        "sentiment": "Neutral"
+      },
+      "messages": [
+        {
+          "external_id": "ghl-msg-9f2a1c",
+          "direction": "in",
+          "author": "Jules Moreau",
+          "body": "Can you resend the onboarding link? The one in the email expired.",
+          "sent_at": "2026-11-26T09:12:00Z"
+        }
+      ]
+    }
+  ]
+}

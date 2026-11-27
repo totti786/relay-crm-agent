@@ -16,7 +16,7 @@
 > **Status:** working prototype. The engine, policy gate, monitoring and self-tests are
 > tested against the bundled demo desk. HubSpot, Intercom and Zendesk connectors are
 > templates until verified against a real workspace — they ship marked `verified: false`
-> on purpose.
+> on purpose. GoHighLevel is browser-only (no API or webhook) and is also unverified.
 
 Relay is not another chatbot bolted onto a CRM. It is the **memory and policy layer** for
 an OpenCode agent that drives your real, already-logged-in browser through
@@ -81,16 +81,44 @@ cd relay-crm-agent
 ./relay init
 ./relay seed-demo --reset
 ./relay doctor
-./relay selftest          # 7 tests, no browser required
+./relay selftest          # 9 tests, no browser required
 ./relay brief
 ./relay queue
 ```
 
-The repo includes the demo desk the screenshot comes from:
+### Windows
+
+The engine is stdlib Python and runs natively. Use `py -3` in front of the script; `./relay`
+is a POSIX shorthand. The script forces UTF-8 for its streams and file reads, so `→`, `●`
+and `·` no longer crash on a cp1252 console. `-X utf8` is belt-and-braces on older setups:
+
+```powershell
+py -3 -X utf8 relay init
+py -3 -X utf8 relay seed-demo --reset
+py -3 -X utf8 relay doctor
+py -3 -X utf8 relay selftest
+py -3 relay brief
+py -3 relay queue
+```
+
+The HTML demos run in any browser:
+`py -3 -m http.server 8765 -d demo`.
+
+Set environment variables in PowerShell with `$env:NAME = "value"` (for example
+`$env:RELAY_DB`, `$env:RELAY_DRAFT_ONLY` or `$env:RELAY_WEBHOOK_SECRET`).
+
+`relay serve --on-change` uses `sh -c` and `rm -f`; it is not supported natively on
+Windows. Run `relay serve` without `--on-change` and poll with `relay sync`, or run the
+whole stack under WSL. The GoHighLevel browser-only watch does not use this hook. The
+browser bridge itself is Browse MCP; confirm its installer supports your Windows setup.
+
+The repo includes the demo desk the screenshot comes from, plus a self-contained
+interactive console that walks the whole loop:
 
 ```bash
 python3 -m http.server 8765 -d demo
-# open http://localhost:8765
+# desk:    http://localhost:8765
+# console: http://localhost:8765/relay-console.html
 ```
 
 Then install the browser bridge and start the agent:
@@ -162,7 +190,8 @@ GET /health
 The receiver returns `{"ok":true,"changed":true|false}`. The on-change hook starts **one**
 draft-only agent run (serialized by a lock) and sets `RELAY_DRAFT_ONLY=1`, so the run can
 read and draft but `relay send` refuses. Without a webhook, poll a snapshot every 2–5
-minutes with `relay sync`.
+minutes with `relay sync`. If the workspace forbids API access — GoHighLevel — use the
+browser-only watch loop in `examples/gohighlevel-watch.md`.
 
 `relay alerts --json --fail-on-breach` exits 3 on an SLA breach or overdue promise, which
 is what a notifier should key off.
@@ -193,13 +222,23 @@ human decision; one strange customer never becomes policy.
 ## Adapting to a CRM
 
 All CRM-specific knowledge lives in `connectors/<crm>.json` — URLs, locators, flows,
-quirks, guardrails. Start with the closest of `hubspot`, `intercom`, `zendesk`, `demo`,
-then verify it read-only:
+quirks, guardrails. Start with the closest of `gohighlevel`, `hubspot`, `intercom`,
+`zendesk`, `demo`, then verify it read-only:
 
 ```bash
 ./relay doctor --connector hubspot
 ./relay connector hubspot
+
+# GoHighLevel (browser-only)
+./relay doctor --connector gohighlevel
+./relay connector gohighlevel
 ```
+
+GoHighLevel is intentionally browser-only: no OAuth, API or webhook. The agent polls the
+Conversations UI, writes a normalised snapshot and runs `relay sync`. See
+`examples/gohighlevel-watch.md`; the connector is `connectors/gohighlevel.json`. Polling is
+slower and selector drift is real; `verified: false` stays until a read-only dry run on
+your sub-account.
 
 `doctor` fails if a connector is missing the controls a send loop needs. The validation
 loop is in `PLAYBOOK.md` §10: observe with Browse → smallest patch → `doctor` +
@@ -243,9 +282,9 @@ PLAYBOOK.md        operating procedure + adaptation loop
 AGENTS.md          OpenCode contract
 config.json        autonomy, policy gates, pacing
 connectors/        CRM selector maps, flows, quirks
-demo/              the demo CRM in the screenshot
+demo/              the demo CRM + interactive console (relay-console.html)
 tests/             regression suite
-examples/          webhook payload, inbox snapshot, on-change hook
+examples/          webhook payload, inbox snapshot, on-change hook, GHL watch runbook
 docs/              screenshot
 ```
 

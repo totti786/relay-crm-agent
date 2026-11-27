@@ -1,0 +1,135 @@
+{
+  "name": "GoHighLevel Conversations",
+  "version": 1,
+  "mode": "browser",
+  "transport": "browser-only",
+  "verified": false,
+  "verified_note": "Template. HighLevel Conversations is a React SPA; run the verify flow against a real location, record the selectors that actually match, and set verified to the date. No OAuth token, private integration token, API key, or cookie belongs in this file.",
+  "match": ["app.gohighlevel.com"],
+  "auth": "Browse MCP reuses the already-logged-in Chrome profile. The user must be signed in and the correct sub-account/location must be selected. Never store HighLevel credentials, tokens, or cookies here.",
+  "policy": {
+    "sends": "Start with autonomy=suggest or approve. Do not auto-send on an unverified browser connector.",
+    "disclosure": "The agent must not pretend to be human. Keep the workspace AI label and follow the account's disclosure policy.",
+    "no_stealth": "No fingerprint spoofing, random delays, fake typing, proxy rotation, or other mimicry to evade HighLevel's automation checks.",
+    "read_only": ["opportunity stage", "opportunity value", "contact owner", "DND settings", "tags"]
+  },
+  "urls": {
+    "agency": "https://app.gohighlevel.com/",
+    "location": "https://app.gohighlevel.com/v2/location/{location_id}/dashboard",
+    "inbox": "https://app.gohighlevel.com/v2/location/{location_id}/conversations",
+    "thread": "https://app.gohighlevel.com/v2/location/{location_id}/conversations/conversations/{conversation_id}",
+    "contact": "https://app.gohighlevel.com/v2/location/{location_id}/contacts/detail/{contact_id}",
+    "opportunities": "https://app.gohighlevel.com/v2/location/{location_id}/opportunities"
+  },
+  "selectors": {
+    "inbox_row": "[data-conversation-id], [class*='conversation-list'] [role='listitem'], [role='listitem'][aria-label*='conversation' i]",
+    "inbox_search": "role=searchbox, input[placeholder*='search' i]",
+    "unread_filter": "role=tab[name=/unread/i], role=button[name=/unread/i]",
+    "unread_badge": "[class*='unread'], [aria-label*='unread' i]",
+    "thread_subject": "role=heading, h1, h2",
+    "message": "[data-message-id], [class*='message-row'], [class*='message-item']",
+    "message_body": "[data-message-id] [class*='body'], [class*='message-content'], [class*='message'] p",
+    "message_meta": "time, [datetime], [class*='timestamp']",
+    "message_id_attr": "data-message-id",
+    "reply_box": "[contenteditable='true'][role='textbox'], textarea[placeholder*='message' i], [contenteditable='true']",
+    "send_button": "role=button[name=/^send/i]",
+    "channel_select": "role=combobox[name=/channel|sms|email|whatsapp/i], [aria-label*='channel' i]",
+    "email_subject": "input[placeholder*='subject' i], role=textbox[name=/subject/i]",
+    "internal_note_toggle": "role=switch[name=/internal|note/i], role=button[name=/internal note/i]",
+    "contact_name": "[class*='contact'] h1, [class*='contact-name'], role=heading",
+    "contact_email": "role=link[name=/@/]",
+    "assignee": "[class*='assignee'], [aria-label*='assigned' i]",
+    "dnd_badge": "[aria-label*='dnd' i], [class*='dnd']",
+    "opportunity_stage": "[class*='opportunity'] [class*='stage'], [data-stage]",
+    "attachment": "[class*='attachment'], [class*='file-name']"
+  },
+  "flows": {
+    "verify": [
+      "navigate {inbox} with the real location_id; wait for the conversation list to render",
+      "browse.snapshot --interactive; for each selector above, record whether it returns 0 or more nodes",
+      "open one harmless test conversation; confirm message ids/timestamps, composer, channel control, internal-note control and send button",
+      "update this file with what actually matched; set verified to the date",
+      "dry-run read_thread only; do not send during verification"
+    ],
+    "read_inbox": [
+      "navigate {inbox}; wait until the conversation list has rows",
+      "use the Unread filter if present; otherwise scan All. Do not trust the unread count badge",
+      "for each row capture: contact name, channel icon/text, snippet, unread state, relative time, and conversation id from data-conversation-id or the row link",
+      "keep scrolling until lazy loading stops; stop at 200 rows and report rather than looping",
+      "compare rows with `relay queue` and `relay thread <id>`; only open new or changed conversations"
+    ],
+    "read_thread": [
+      "click the conversation row; do not rely on {thread} to deep-link — HighLevel conversation URLs are known not to open the selected thread",
+      "wait for the message list; snapshot the whole conversation pane",
+      "for each message capture: direction, author, exact timestamp, body, channel, attachment names, and data-message-id if present",
+      "if no stable message id or exact timestamp exists, stop and report; do not write a snapshot",
+      "build the normalised shape in examples/gohighlevel-browser-snapshot.json (thread id = conversation id, external_id = message id)",
+      "run `relay sync --stdin` with the snapshot; never hand-edit messages after ingest"
+    ],
+    "watch": [
+      "every 120 seconds during support hours, run read_inbox",
+      "open up to 10 changed conversations and run read_thread for each",
+      "emit one normalised snapshot and run `relay sync --stdin`",
+      "run `relay brief` and `relay queue`; draft only, never send in the watch run",
+      "one watch run at a time; use a lock like examples/on-change.sh",
+      "if any thread lacks stable message ids/timestamps, stop the whole run rather than risk duplicates"
+    ],
+    "send_reply": [
+      "confirm the location and contact; open the conversation row",
+      "confirm the last inbound channel (SMS/email/WhatsApp/FB/IG/live chat); check DND/opt-out before composing",
+      "confirm the Internal note toggle is OFF; if the UI cannot prove it, stop",
+      "click the composer and type the approved text (fill may not fire React input events); for email confirm subject and recipients",
+      "read the rendered text and compare it to the approved text; check for unresolved placeholders",
+      "click Send; wait_for the sent text in the thread",
+      "only then run `relay send <thread> --text '<exact text>'` and pass --commit/--commit-due if a promise was made"
+    ],
+    "add_note": [
+      "switch the composer to Internal note; confirm the mode visually",
+      "type the note and submit",
+      "record it with `relay log <thread> --kind note --text '<exact note>'`",
+      "never leave a note in the customer reply mode"
+    ],
+    "read_context": [
+      "open {contact}; read tags, owner, timezone, DND state, and the related opportunity",
+      "open {opportunities} and read pipeline, stage and value",
+      "do not edit stage, value, owner, tags or DND; those are human decisions or another system's data",
+      "record anything that changes the reply with `relay log <thread> --kind note`"
+    ]
+  },
+  "watch": {
+    "mode": "browser-poll",
+    "cadence_seconds": 120,
+    "inbox_url": "{inbox}",
+    "ingest": "relay sync --stdin",
+    "dedupe_key": "external_id from data-message-id",
+    "missing_id_policy": "stop and report; do not ingest",
+    "max_threads_per_run": 10,
+    "send_policy": "draft-only"
+  },
+  "quirks": [
+    "Conversations is a React SPA; prefer role/text/data-* locators over CSS classes and re-verify after HighLevel releases.",
+    "Conversation URLs exist (…/conversations/conversations/{id}) but are known not to reliably open that conversation; drive the inbox row instead.",
+    "The inbox is unified: SMS, email, WhatsApp, Facebook, Instagram and live chat share one list. Confirm the channel before promising a response time.",
+    "The composer is usually contenteditable; fill may not dispatch input events, so type and then read the rendered text.",
+    "Internal note/comment and customer reply share the same composer area; confirm the mode before every submit.",
+    "DND/opt-out and SMS quiet hours apply. A contact can be present in the inbox but still not messageable.",
+    "Email replies need a subject and may thread differently; SMS counts segments and can split a long reply.",
+    "Conversation AI/Workflows may have already answered; read the full thread before adding a human reply.",
+    "Attachment uploads and media messages are asynchronous; do not submit until the upload settles.",
+    "Agencies have multiple sub-accounts/locations. The wrong location id is the wrong customer; verify it before reading.",
+    "Rows lazy-load; scan until the list stops growing instead of trusting the first page.",
+    "Relative timestamps and missing message ids break idempotent ingest; capture exact time/ID or stop."
+  ],
+  "guardrails": [
+    "Never send with the internal-note toggle on; verify the customer-facing mode visually before submit.",
+    "Never message a DND/opted-out contact or ignore SMS quiet hours.",
+    "Do not reply in a conversation assigned to another user without an explicit handoff note.",
+    "Do not edit opportunity stage/value, contact owner, tags or DND; read them into context only.",
+    "Use the channel of the last inbound message unless the customer explicitly asks otherwise.",
+    "Do not hide that the agent is an AI; keep the workspace label and follow the disclosure policy.",
+    "No stealth: no fingerprint spoofing, proxy rotation, random delays, fake typing, or other detection evasion.",
+    "Check HighLevel's terms and the agency agreement before enabling browser automation; accounts can be restricted.",
+    "If a thread has no stable message id/timestamp in the DOM, stop the watch; do not fall back to relative times.",
+    "Voicemail, calls and attachments are not text messages; escalate rather than pretending you listened or read them."
+  ]
+}

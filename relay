@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -22,6 +23,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DB = ROOT / "data" / "relay.db"
 DB_PATH = Path(os.environ.get("RELAY_DB", DEFAULT_DB))
+
+# Windows consoles/pipes default to cp1252; relay prints · × — → ● ○. Use UTF-8
+# everywhere and replace authoritatively rather than crashing mid-report.
+for _stream in (sys.stdin, sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
 
 BOLD, DIM, GREEN, AMBER, RED, RESET = "", "", "", "", "", ""
 if sys.stdout.isatty():
@@ -253,7 +263,7 @@ def load_config():
     path = ROOT / "config.json"
     if path.exists():
         try:
-            cfg.update(json.loads(path.read_text()))
+            cfg.update(json.loads(path.read_text(encoding="utf-8")))
         except json.JSONDecodeError:
             sys.exit("error: config.json is not valid JSON")
     return cfg
@@ -808,7 +818,7 @@ def cmd_search(args):
 
 def cmd_ingest(args):
     """Upsert a normalised CRM payload (webhook, API poll, or export)."""
-    raw = sys.stdin.read() if args.stdin else Path(args.file).read_text()
+    raw = sys.stdin.read() if args.stdin else Path(args.file).read_text(encoding="utf-8")
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as e:
@@ -856,7 +866,7 @@ def cmd_ingest(args):
 
 def cmd_sync(args):
     """Diff an inbox snapshot into the store. Safe to run repeatedly (idempotent)."""
-    raw = sys.stdin.read() if args.stdin else Path(args.file).read_text()
+    raw = sys.stdin.read() if args.stdin else Path(args.file).read_text(encoding="utf-8")
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as e:
@@ -1037,6 +1047,9 @@ def cmd_serve(args):
     secret = args.secret or os.environ.get("RELAY_WEBHOOK_SECRET")
     if args.host not in ("127.0.0.1", "localhost", "::1") and not secret:
         sys.exit("error: refusing to bind a public interface without --secret")
+    if args.on_change and os.name == "nt" and not shutil.which("sh"):
+        sys.exit("error: --on-change needs a POSIX shell and rm. Run the whole stack under "
+                 "WSL, or omit --on-change and poll with relay sync.")
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     lock = DB_PATH.parent / "hook.lock"
@@ -1100,7 +1113,7 @@ def cmd_serve(args):
             mode = "sync" if "threads" in payload else "ingest"
             proc = subprocess.run(
                 [sys.executable, str(ROOT / "relay"), mode, "--stdin"],
-                input=json.dumps(payload), text=True, capture_output=True,
+                input=json.dumps(payload), text=True, encoding="utf-8", capture_output=True,
                 env=os.environ.copy(),
             )
             if proc.returncode != 0:
@@ -1137,7 +1150,7 @@ def cmd_connectors(_args):
     print(f"\n{BOLD}Connectors{RESET} {DIM}· selector maps + flows; verify on first run{RESET}\n")
     for f in files:
         try:
-            data = json.loads(f.read_text())
+            data = json.loads(f.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             print(f"  {f.stem}: invalid JSON")
             continue
@@ -1149,14 +1162,14 @@ def cmd_connector(args):
     path = ROOT / "connectors" / f"{args.name}.json"
     if not path.exists():
         sys.exit(f"error: no connector '{args.name}' (try: relay connectors)")
-    print(path.read_text())
+    print(path.read_text(encoding="utf-8"))
 
 
 def read_doc(name):
     path = ROOT / name
     if not path.exists():
         sys.exit(f"error: {name} is missing from {ROOT}")
-    return path.read_text()
+    return path.read_text(encoding="utf-8")
 
 
 def cmd_soul(args):
@@ -1345,7 +1358,7 @@ def cmd_doctor(args):
         problems.append(f"connector not found: {args.connector}")
     for path in files:
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
             problems.append(f"{path.name}: invalid JSON ({e})")
             continue
@@ -1381,7 +1394,7 @@ def cmd_doctor(args):
 
 def cmd_selftest(_args):
     proc = subprocess.run(
-        [sys.executable, "-m", "unittest", "discover", "-s", str(ROOT / "tests"), "-v"],
+        [sys.executable, "-X", "utf8", "-m", "unittest", "discover", "-s", str(ROOT / "tests"), "-v"],
         cwd=str(ROOT),
     )
     sys.exit(proc.returncode)

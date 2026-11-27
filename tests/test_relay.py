@@ -15,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RELAY = str(ROOT / "relay")
 SNAPSHOT = str(ROOT / "examples" / "inbox-snapshot.json")
+GHL_SNAPSHOT = str(ROOT / "examples" / "gohighlevel-browser-snapshot.json")
 
 
 class RelayTest(unittest.TestCase):
@@ -31,7 +32,7 @@ class RelayTest(unittest.TestCase):
     def cmd(self, *args, input=None, ok=True):
         proc = subprocess.run(
             [sys.executable, RELAY, *args], env=self.env,
-            input=input, text=True, capture_output=True,
+            input=input, text=True, encoding="utf-8", capture_output=True,
         )
         if ok and proc.returncode != 0:
             self.fail(f"{args} failed ({proc.returncode}): {proc.stderr}\n{proc.stdout}")
@@ -91,6 +92,19 @@ class RelayTest(unittest.TestCase):
         self.assertEqual(second["new_messages"], [])
         self.assertEqual(second["unchanged"], 3)
 
+    def test_gohighlevel_browser_snapshot_ingests(self):
+        first = json.loads(self.cmd("sync", GHL_SNAPSHOT).stdout)
+        self.assertEqual([t["thread"] for t in first["new_threads"]], ["ghl-conv-8f3c2a"])
+        self.assertEqual(first["new_messages"][0]["count"], 1)
+
+        thread = self.json("thread", "ghl-conv-8f3c2a")
+        self.assertEqual(thread["contact"], "Jules Moreau")
+        self.assertEqual(thread["messages"][-1]["direction"], "in")
+
+        second = json.loads(self.cmd("sync", GHL_SNAPSHOT).stdout)
+        self.assertEqual(second["new_threads"], [])
+        self.assertEqual(second["new_messages"], [])
+
     def test_lesson_promotion_changes_loaded_identity(self):
         self.cmd("lesson", "add", "--scope", "voice", "--text",
                  "Open with one sentence that covers both asks.",
@@ -98,6 +112,11 @@ class RelayTest(unittest.TestCase):
         self.cmd("lesson", "promote", "1", "--by", "alex")
         soul = self.cmd("soul", "--with-lessons").stdout
         self.assertIn("Open with one sentence that covers both asks.", soul)
+
+    def test_script_renders_unicode(self):
+        # script.md contains "→"; this fails on Windows if stdout/locale is cp1252.
+        out = self.cmd("script").stdout
+        self.assertIn("→", out)
 
     def test_draft_only_env_blocks_send(self):
         self.cmd("draft", "t-marcus", "--text", "Draft only.")
